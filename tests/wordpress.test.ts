@@ -23,8 +23,36 @@ describe("WordPressClient", () => {
     const runCalls = fake.calls.filter((call) => call.url.pathname.endsWith("/run"));
     expect(runCalls.map((call) => call.init?.method)).toEqual(["GET", "POST", "DELETE"]);
     expect(runCalls[0]?.url.pathname).toBe("/wp-json/wp-abilities/v1/novamira/read-file/run");
-    expect(runCalls[0]?.url.searchParams.get("input")).toBe('{"path":"wp-content/test.txt"}');
+    expect(runCalls[0]?.url.searchParams.get("input[path]")).toBe("wp-content/test.txt");
     expect(runCalls[1]?.init?.body).toBe('{"input":{"path":"wp-content/test.txt","content":"ok"}}');
+    expect(runCalls[2]?.url.searchParams.get("input[path]")).toBe("wp-content/test.txt");
+  });
+
+  it("serializes nested GET input using WordPress query parameter semantics", async () => {
+    const fake = makeWordPressFetch();
+    const client = new WordPressClient(testConfig, silentLogger, fake.fetch);
+
+    await client.runAbility("novamira/read-file", {
+      path: "wp-content/test.txt",
+      filters: { status: "publish", featured: false },
+      fields: ["id", "name"],
+      page: 2,
+      per_page: 1,
+      status: "publish",
+    });
+
+    const runCall = fake.calls.find((call) => call.url.pathname.endsWith("/run"));
+    expect(Object.fromEntries(runCall?.url.searchParams ?? [])).toEqual({
+      "input[path]": "wp-content/test.txt",
+      "input[filters][status]": "publish",
+      "input[filters][featured]": "false",
+      "input[fields][0]": "id",
+      "input[fields][1]": "name",
+      "input[page]": "2",
+      "input[per_page]": "1",
+      "input[status]": "publish",
+    });
+    expect(runCall?.url.searchParams.has("input")).toBe(false);
   });
 
   it("uses the live same-origin action-run URL advertised by WordPress", async () => {
@@ -43,7 +71,7 @@ describe("WordPressClient", () => {
 
     const runCall = fake.calls.find((call) => call.url.pathname.endsWith("/run"));
     expect(runCall?.url.pathname).toBe("/wp-json/wp-abilities/v1/abilities/novamira/read-file/run");
-    expect(runCall?.url.searchParams.get("input")).toBe('{"path":"wp-content/test.txt"}');
+    expect(runCall?.url.searchParams.get("input[path]")).toBe("wp-content/test.txt");
   });
 
   it("rejects unsafe action-run URLs before sending WordPress credentials", async () => {

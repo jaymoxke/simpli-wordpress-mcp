@@ -66,6 +66,32 @@ function isSchemaObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function appendAbilityInputQuery(
+  query: Record<string, string>,
+  key: string,
+  value: unknown,
+): void {
+  if (value === undefined) return;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => appendAbilityInputQuery(query, `${key}[${index}]`, item));
+    return;
+  }
+  if (isSchemaObject(value)) {
+    for (const [name, child] of Object.entries(value)) {
+      appendAbilityInputQuery(query, `${key}[${name}]`, child);
+    }
+    return;
+  }
+  query[key] = value === null ? "" : String(value);
+}
+
+function serializeAbilityInputQuery(input: unknown): Record<string, string> | undefined {
+  if (input === undefined || input === null) return undefined;
+  const query: Record<string, string> = {};
+  appendAbilityInputQuery(query, "input", input);
+  return Object.keys(query).length > 0 ? query : undefined;
+}
+
 // WordPress accepts boolean `required` markers and serializes empty PHP arrays
 // as `[]`; MCP tool definitions need standard JSON Schema object maps and
 // string-array `required` declarations.
@@ -321,13 +347,11 @@ export class WordPressClient {
     const annotations = getAbilityAnnotations(ability);
     const path = this.resolveAbilityRunUrl(ability);
     if (annotations.readonly) {
-      const query = input === undefined || (typeof input === "object" && input !== null && Object.keys(input).length === 0)
-        ? undefined
-        : { input: JSON.stringify(input) };
+      const query = serializeAbilityInputQuery(input);
       return (await this.request<unknown>("GET", path, { ...(query ? { query } : {}) })).data;
     }
     if (annotations.destructive) {
-      const query = input === undefined ? undefined : { input: JSON.stringify(input) };
+      const query = serializeAbilityInputQuery(input);
       return (await this.request<unknown>("DELETE", path, { ...(query ? { query } : {}) })).data;
     }
     return (await this.request<unknown>("POST", path, { body: { input: input ?? {} } })).data;
