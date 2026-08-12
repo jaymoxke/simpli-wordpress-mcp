@@ -289,10 +289,37 @@ export class WordPressClient {
     return ability;
   }
 
+  private resolveAbilityRunUrl(ability: WordPressAbility): string | URL {
+    const fallback = `/wp-abilities/v1/${abilityPath(ability.name)}/run`;
+    if (!isSchemaObject(ability._links) || !("wp:action-run" in ability._links)) return fallback;
+
+    const actionLinks = ability._links["wp:action-run"];
+    const href = Array.isArray(actionLinks)
+      ? actionLinks.find((link) => isSchemaObject(link) && typeof link.href === "string" && link.href.length > 0)?.href
+      : undefined;
+    if (typeof href !== "string") {
+      throw new WordPressRequestError(`WordPress advertised an invalid action-run URL for ${ability.name}`, 502);
+    }
+
+    let url: URL;
+    try {
+      url = new URL(href, `${this.config.wordpressUrl}/`);
+    } catch {
+      throw new WordPressRequestError(`WordPress advertised an invalid action-run URL for ${ability.name}`, 502);
+    }
+
+    const wordpressOrigin = new URL(this.config.wordpressUrl).origin;
+    if (url.origin !== wordpressOrigin || url.username || url.password) {
+      throw new WordPressRequestError(`WordPress action-run URL failed same-origin validation for ${ability.name}`, 502);
+    }
+    url.hash = "";
+    return url;
+  }
+
   async runAbility(name: string, input: unknown): Promise<unknown> {
     const ability = await this.getAbility(name);
     const annotations = getAbilityAnnotations(ability);
-    const path = `/wp-abilities/v1/${abilityPath(name)}/run`;
+    const path = this.resolveAbilityRunUrl(ability);
     if (annotations.readonly) {
       const query = input === undefined || (typeof input === "object" && input !== null && Object.keys(input).length === 0)
         ? undefined
@@ -331,14 +358,16 @@ export class WordPressClient {
 
   private async request<T>(
     method: "GET" | "POST" | "DELETE",
-    route: string,
+    route: string | URL,
     options: {
       query?: Record<string, string>;
       body?: unknown;
       includeResponse?: boolean;
     } = {},
   ): Promise<{ data: T; headers: Headers }> {
-    const url = new URL(`${this.config.wordpressUrl}/wp-json${route}`);
+    const url = route instanceof URL
+      ? new URL(route.toString())
+      : new URL(`${this.config.wordpressUrl}/wp-json${route}`);
     for (const [key, value] of Object.entries(options.query ?? {})) url.searchParams.set(key, value);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.config.wordpressTimeoutMs);

@@ -22,8 +22,48 @@ describe("WordPressClient", () => {
     await client.runAbility("novamira/delete-file", { path: "wp-content/test.txt" });
     const runCalls = fake.calls.filter((call) => call.url.pathname.endsWith("/run"));
     expect(runCalls.map((call) => call.init?.method)).toEqual(["GET", "POST", "DELETE"]);
+    expect(runCalls[0]?.url.pathname).toBe("/wp-json/wp-abilities/v1/novamira/read-file/run");
     expect(runCalls[0]?.url.searchParams.get("input")).toBe('{"path":"wp-content/test.txt"}');
     expect(runCalls[1]?.init?.body).toBe('{"input":{"path":"wp-content/test.txt","content":"ok"}}');
+  });
+
+  it("uses the live same-origin action-run URL advertised by WordPress", async () => {
+    const ability = {
+      ...fakeAbilities[1]!,
+      _links: {
+        "wp:action-run": [{
+          href: "https://wordpress.example.test/wp-json/wp-abilities/v1/abilities/novamira/read-file/run",
+        }],
+      },
+    };
+    const fake = makeWordPressFetch([ability]);
+    const client = new WordPressClient(testConfig, silentLogger, fake.fetch);
+
+    await client.runAbility("novamira/read-file", { path: "wp-content/test.txt" });
+
+    const runCall = fake.calls.find((call) => call.url.pathname.endsWith("/run"));
+    expect(runCall?.url.pathname).toBe("/wp-json/wp-abilities/v1/abilities/novamira/read-file/run");
+    expect(runCall?.url.searchParams.get("input")).toBe('{"path":"wp-content/test.txt"}');
+  });
+
+  it("rejects unsafe action-run URLs before sending WordPress credentials", async () => {
+    for (const href of [
+      "https://attacker.example/run",
+      "https://attacker:secret@wordpress.example.test/wp-json/wp-abilities/v1/abilities/core/get-site-info/run",
+    ]) {
+      const ability = {
+        ...fakeAbilities[0]!,
+        _links: { "wp:action-run": [{ href }] },
+      };
+      const fake = makeWordPressFetch([ability]);
+      const client = new WordPressClient(testConfig, silentLogger, fake.fetch);
+
+      await expect(client.runAbility("core/get-site-info", {})).rejects.toMatchObject({
+        status: 502,
+        message: expect.stringMatching(/same-origin validation/),
+      });
+      expect(fake.calls).toHaveLength(1);
+    }
   });
 
   it("forces PHP, WP-CLI, and admin-link abilities into the dangerous class", () => {
