@@ -1,5 +1,6 @@
 import type { AppConfig } from "./config.js";
 import type { Logger } from "./logger.js";
+import { RankMathLiveScoreService } from "./rankmath-live-score.js";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -55,6 +56,49 @@ export class WordPressRequestError extends Error {
     this.name = "WordPressRequestError";
   }
 }
+
+export const LIVE_RANK_MATH_SCORE_ABILITY: WordPressAbility = {
+  name: "simpli/rank-math-get-live-seo-score",
+  label: "Get live Rank Math SEO score",
+  category: "rank-math",
+  description:
+    "Opens the real WordPress editor in an isolated headless Chromium session and reads Rank Math's client-side getAnalysisScore() only after the analysis is stable and not refreshing. Use this when an exact current Rank Math score is required; do not substitute stored rank_math_seo_score metadata.",
+  input_schema: {
+    type: "object",
+    required: ["post_id"],
+    properties: {
+      post_id: {
+        type: "integer",
+        minimum: 1,
+        description: "WordPress post ID whose live Rank Math editor score should be verified.",
+      },
+    },
+    additionalProperties: false,
+  },
+  output_schema: {
+    type: "object",
+    required: ["post_id", "seo_score", "source", "verification", "stale", "editor", "observed_at"],
+    properties: {
+      post_id: { type: "integer" },
+      seo_score: { type: "integer" },
+      source: { type: "string" },
+      verification: { type: "string" },
+      stale: { type: "boolean" },
+      editor: { type: "string" },
+      stable_samples: { type: "integer" },
+      observed_at: { type: "string" },
+    },
+  },
+  meta: {
+    annotations: {
+      readonly: true,
+      destructive: false,
+      idempotent: true,
+      instructions:
+        "This is the authoritative exact-score path. It uses a temporary one-time wp-admin session, waits for Rank Math's Redux store to finish refreshing, and rejects unstable or unavailable scores instead of falling back to stored zero values.",
+    },
+  },
+};
 
 function abilityPath(name: string): string {
   const parts = name.split("/");
@@ -296,6 +340,7 @@ export class WordPressClient {
       const totalPages = Number(response.headers.get("x-wp-totalpages") ?? "0");
       if ((totalPages > 0 && page >= totalPages) || items.length < 100) break;
     }
+    abilities.push(LIVE_RANK_MATH_SCORE_ABILITY);
     const seen = new Set<string>();
     return abilities.filter((ability) => {
       if (!ability?.name || seen.has(ability.name)) return false;
@@ -343,6 +388,9 @@ export class WordPressClient {
   }
 
   async runAbility(name: string, input: unknown): Promise<unknown> {
+    if (name === LIVE_RANK_MATH_SCORE_ABILITY.name) {
+      return new RankMathLiveScoreService(this.config, this.logger, this.fetchImpl).getScore(input);
+    }
     const ability = await this.getAbility(name);
     const annotations = getAbilityAnnotations(ability);
     const path = this.resolveAbilityRunUrl(ability);
