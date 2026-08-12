@@ -3,7 +3,7 @@ import { getAbilityAnnotations, getAbilityInputSchema, WordPressClient } from ".
 import { fakeAbilities, makeWordPressFetch, silentLogger, testConfig } from "./helpers.js";
 
 describe("WordPressClient", () => {
-  it("discovers and caches all REST-exposed abilities plus the synthetic live score ability with Basic authentication", async () => {
+  it("discovers and caches REST abilities plus the synthetic live score ability with Basic authentication", async () => {
     const fake = makeWordPressFetch();
     const client = new WordPressClient(testConfig, silentLogger, fake.fetch);
     const first = await client.getAbilitySnapshot();
