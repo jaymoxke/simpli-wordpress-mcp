@@ -28,7 +28,7 @@ async function listen(): Promise<string> {
 describe("OAuth 2.1", () => {
   it("supports DCR, authorization code + PKCE, refresh, and code replay prevention", async () => {
     const base = await listen();
-    const redirectUri = "https://chatgpt.example.test/oauth/callback";
+    const redirectUri = "https://chatgpt.com/connector/oauth/test-callback";
     const registration = await fetch(`${base}/oauth/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -51,6 +51,10 @@ describe("OAuth 2.1", () => {
     const authorizationPage = await fetch(`${base}/oauth/authorize?${form.toString()}`);
     expect(authorizationPage.status).toBe(200);
     expect(authorizationPage.headers.get("cross-origin-opener-policy")).toBe("unsafe-none");
+    expect(authorizationPage.headers.get("content-security-policy")).toContain(
+      "form-action 'self' https://chatgpt.com",
+    );
+    expect(authorizationPage.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
 
     const authorization = await fetch(`${base}/oauth/authorize`, {
       method: "POST",
@@ -60,9 +64,17 @@ describe("OAuth 2.1", () => {
     });
     expect(authorization.status).toBe(303);
     expect(authorization.headers.get("cross-origin-opener-policy")).toBe("unsafe-none");
+    expect(authorization.headers.get("content-security-policy")).toContain(
+      "form-action 'self' https://chatgpt.com",
+    );
     const location = new URL(authorization.headers.get("location")!);
+    expect(location.origin).toBe("https://chatgpt.com");
     expect(location.searchParams.get("state")).toBe("state-123");
     const code = location.searchParams.get("code")!;
+
+    const nonAuthorizationRoute = await fetch(`${base}/health`);
+    expect(nonAuthorizationRoute.headers.get("content-security-policy")).toContain("form-action 'self'");
+    expect(nonAuthorizationRoute.headers.get("content-security-policy")).not.toContain("https://chatgpt.com");
 
     const tokenBody = new URLSearchParams({
       grant_type: "authorization_code",

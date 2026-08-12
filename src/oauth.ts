@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response, Router } from "express";
 import express from "express";
+import helmet from "helmet";
 import { z } from "zod";
 import type { AppConfig } from "./config.js";
 import {
@@ -379,14 +380,26 @@ body{font-family:system-ui,sans-serif;background:#f6f7f9;color:#17202a;margin:0;
 export function createOAuthRouter(config: AppConfig, service: OAuthService): Router {
   const router = express.Router();
   router.use(express.urlencoded({ extended: false, limit: "32kb" }));
-  // ChatGPT opens the authorization endpoint in a popup from a document using
-  // `same-origin-allow-popups`. Helmet's default `same-origin` policy would
-  // sever that opener relationship and leave ChatGPT's callback UI waiting
-  // indefinitely. Keep the exception limited to the interactive OAuth route.
-  router.use("/oauth/authorize", (_req, res, next) => {
-    res.set("Cross-Origin-Opener-Policy", "unsafe-none");
-    next();
-  });
+  // ChatGPT opens this endpoint in a popup and returns the authorization code
+  // through chatgpt.com. Keep both browser-policy exceptions limited to the
+  // exact interactive OAuth route; every other response retains Helmet's
+  // default COOP and same-origin form-action policies.
+  router.all(
+    "/oauth/authorize",
+    helmet.contentSecurityPolicy({
+      directives: {
+        defaultSrc: ["'none'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        formAction: ["'self'", "https://chatgpt.com"],
+        baseUri: ["'none'"],
+        frameAncestors: ["'none'"],
+      },
+    }),
+    (_req, res, next) => {
+      res.set("Cross-Origin-Opener-Policy", "unsafe-none");
+      next();
+    },
+  );
 
   const protectedResource = {
     resource: config.resourceUrl,
