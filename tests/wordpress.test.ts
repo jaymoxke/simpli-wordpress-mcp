@@ -3,29 +3,30 @@ import { getAbilityAnnotations, getAbilityInputSchema, WordPressClient } from ".
 import { fakeAbilities, makeWordPressFetch, silentLogger, testConfig } from "./helpers.js";
 
 describe("WordPressClient", () => {
-  it("discovers and caches all REST-exposed abilities with Basic authentication", async () => {
+  it("discovers and caches all REST-exposed abilities plus the synthetic live score ability with Basic authentication", async () => {
     const fake = makeWordPressFetch();
     const client = new WordPressClient(testConfig, silentLogger, fake.fetch);
     const first = await client.getAbilitySnapshot();
     const second = await client.getAbilitySnapshot();
-    expect(first.abilities).toHaveLength(fakeAbilities.length);
-    expect(second.abilities).toHaveLength(fakeAbilities.length);
+    expect(first.abilities).toHaveLength(fakeAbilities.length + 1);
+    expect(second.abilities).toHaveLength(fakeAbilities.length + 1);
+    expect(first.abilities.map((ability) => ability.name)).toContain("simpli/rank-math-get-live-seo-score");
     expect(fake.calls).toHaveLength(1);
     expect(fake.calls[0]?.init?.headers).toMatchObject({ Authorization: expect.stringMatching(/^Basic /) });
   });
 
-  it("uses GET, POST, and DELETE from the authoritative ability annotations", async () => {
+  it("uses GET for read-only abilities and POST for both write and destructive abilities", async () => {
     const fake = makeWordPressFetch();
     const client = new WordPressClient(testConfig, silentLogger, fake.fetch);
     await client.runAbility("novamira/read-file", { path: "wp-content/test.txt" });
     await client.runAbility("novamira/write-file", { path: "wp-content/test.txt", content: "ok" });
     await client.runAbility("novamira/delete-file", { path: "wp-content/test.txt" });
     const runCalls = fake.calls.filter((call) => call.url.pathname.endsWith("/run"));
-    expect(runCalls.map((call) => call.init?.method)).toEqual(["GET", "POST", "DELETE"]);
+    expect(runCalls.map((call) => call.init?.method)).toEqual(["GET", "POST", "POST"]);
     expect(runCalls[0]?.url.pathname).toBe("/wp-json/wp-abilities/v1/novamira/read-file/run");
     expect(runCalls[0]?.url.searchParams.get("input[path]")).toBe("wp-content/test.txt");
     expect(runCalls[1]?.init?.body).toBe('{"input":{"path":"wp-content/test.txt","content":"ok"}}');
-    expect(runCalls[2]?.url.searchParams.get("input[path]")).toBe("wp-content/test.txt");
+    expect(runCalls[2]?.init?.body).toBe('{"input":{"path":"wp-content/test.txt"}}');
   });
 
   it("serializes nested GET input using WordPress query parameter semantics", async () => {
