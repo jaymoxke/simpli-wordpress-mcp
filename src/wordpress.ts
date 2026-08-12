@@ -29,7 +29,7 @@ export interface WordPressAbility {
   label?: string;
   description?: string;
   category?: string;
-  input_schema?: JsonSchema;
+  input_schema?: unknown;
   output_schema?: JsonSchema;
   meta?: {
     annotations?: AbilityAnnotations;
@@ -62,13 +62,115 @@ function abilityPath(name: string): string {
   return `${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}`;
 }
 
-function normalizeInputSchema(schema: JsonSchema | undefined): JsonSchema {
-  if (!schema) return { type: "object", properties: {}, additionalProperties: false };
-  if (schema.type === "object" || schema.properties) return schema;
+function isSchemaObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// WordPress accepts boolean `required` markers and serializes empty PHP arrays
+// as `[]`; MCP tool definitions need standard JSON Schema object maps and
+// string-array `required` declarations.
+function normalizeSchemaMap(value: unknown): Record<string, JsonSchema> {
+  if (!isSchemaObject(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).map(([name, child]) => [name, normalizeSchemaNode(child)]),
+  );
+}
+
+function normalizeSchemaNode(value: unknown): JsonSchema {
+  if (!isSchemaObject(value)) return {};
+
+  const normalized: Record<string, unknown> = { ...value };
+  const inferredRequired: string[] = [];
+
+  if ("properties" in value) {
+    const properties: Record<string, JsonSchema> = {};
+    if (isSchemaObject(value.properties)) {
+      for (const [name, child] of Object.entries(value.properties)) {
+        properties[name] = normalizeSchemaNode(child);
+        if (isSchemaObject(child) && child.required === true) inferredRequired.push(name);
+      }
+    }
+    normalized.properties = properties;
+  } else if (value.type === "object") {
+    normalized.properties = {};
+  }
+
+  const declaredRequired = Array.isArray(value.required)
+    ? value.required.filter((name): name is string => typeof name === "string" && name.length > 0)
+    : [];
+  const required = [...new Set([...declaredRequired, ...inferredRequired])];
+  if (required.length > 0) normalized.required = required;
+  else delete normalized.required;
+
+  for (const keyword of ["patternProperties", "$defs", "definitions", "dependentSchemas"] as const) {
+    if (keyword in value) normalized[keyword] = normalizeSchemaMap(value[keyword]);
+  }
+
+  for (const keyword of ["allOf", "anyOf", "oneOf", "prefixItems"] as const) {
+    if (!(keyword in value)) continue;
+    normalized[keyword] = Array.isArray(value[keyword])
+      ? value[keyword].map((child) => normalizeSchemaNode(child))
+      : [];
+  }
+
+  if ("items" in value) {
+    normalized.items = Array.isArray(value.items)
+      ? value.items.map((child) => normalizeSchemaNode(child))
+      : normalizeSchemaNode(value.items);
+  }
+
+  for (const keyword of [
+    "contains",
+    "propertyNames",
+    "not",
+    "if",
+    "then",
+    "else",
+    "unevaluatedItems",
+  ] as const) {
+    if (!(keyword in value)) continue;
+    const child = value[keyword];
+    if (typeof child === "boolean") normalized[keyword] = child;
+    else normalized[keyword] = normalizeSchemaNode(child);
+  }
+
+  for (const keyword of ["additionalProperties", "unevaluatedProperties"] as const) {
+    if (!(keyword in value)) continue;
+    const child = value[keyword];
+    if (typeof child === "boolean") normalized[keyword] = child;
+    else normalized[keyword] = normalizeSchemaNode(child);
+  }
+
+  return normalized as JsonSchema;
+}
+
+function emptyInputSchema(): JsonSchema {
+  return { type: "object", properties: {}, additionalProperties: false };
+}
+
+function normalizeInputSchema(schema: unknown): JsonSchema {
+  if (!isSchemaObject(schema)) return emptyInputSchema();
+
+  const inputIsRequired = schema.required === true;
+  const normalized = normalizeSchemaNode(schema);
+  if (
+    normalized.type === "object" ||
+    (Array.isArray(normalized.type) && normalized.type.includes("object")) ||
+    "properties" in normalized ||
+    "required" in normalized ||
+    "additionalProperties" in normalized
+  ) {
+    return {
+      ...normalized,
+      type: "object",
+      properties: normalizeSchemaMap(normalized.properties),
+    };
+  }
+  if (Object.keys(normalized).length === 0) return emptyInputSchema();
   return {
     type: "object",
-    properties: { input: schema },
-    required: ["input"],
+    properties: { input: normalized },
+    ...(inputIsRequired ? { required: ["input"] } : {}),
     additionalProperties: false,
   };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getAbilityAnnotations, WordPressClient } from "../src/wordpress.js";
+import { getAbilityAnnotations, getAbilityInputSchema, WordPressClient } from "../src/wordpress.js";
 import { fakeAbilities, makeWordPressFetch, silentLogger, testConfig } from "./helpers.js";
 
 describe("WordPressClient", () => {
@@ -32,5 +32,65 @@ describe("WordPressClient", () => {
       expect(annotations.readonly).toBe(false);
       expect(annotations.destructive).toBe(true);
     }
+  });
+
+  it("normalizes malformed WordPress input schemas without losing required fields", () => {
+    expect(getAbilityInputSchema({ name: "test/empty-array", input_schema: [] })).toEqual({
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    });
+
+    expect(getAbilityInputSchema({
+      name: "test/required-scalar",
+      input_schema: { type: "string", required: true },
+    })).toEqual({
+      type: "object",
+      properties: { input: { type: "string" } },
+      required: ["input"],
+      additionalProperties: false,
+    });
+
+    const normalized = getAbilityInputSchema({
+      name: "test/malformed-object",
+      input_schema: {
+        type: "object",
+        properties: {
+          title: { type: "string", required: true },
+          options: {
+            type: "object",
+            properties: [],
+            required: true,
+          },
+          entries: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "integer", required: true },
+              },
+            },
+          },
+        },
+        required: ["options", "options", 7],
+      },
+    });
+
+    expect(normalized).toEqual({
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        options: { type: "object", properties: {} },
+        entries: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { id: { type: "integer" } },
+            required: ["id"],
+          },
+        },
+      },
+      required: ["options", "title"],
+    });
   });
 });
