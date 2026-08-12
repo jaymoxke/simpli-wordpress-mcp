@@ -398,10 +398,6 @@ export class WordPressClient {
       const query = serializeAbilityInputQuery(input);
       return (await this.request<unknown>("GET", path, { ...(query ? { query } : {}) })).data;
     }
-    if (annotations.destructive) {
-      const query = serializeAbilityInputQuery(input);
-      return (await this.request<unknown>("DELETE", path, { ...(query ? { query } : {}) })).data;
-    }
     return (await this.request<unknown>("POST", path, { body: { input: input ?? {} } })).data;
   }
 
