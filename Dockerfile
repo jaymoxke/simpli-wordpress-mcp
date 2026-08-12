@@ -8,6 +8,7 @@ RUN npm run build
 
 FROM node:22-alpine AS runtime
 ENV NODE_ENV=production
+ENV CHROMIUM_PATH=/usr/bin/chromium
 WORKDIR /app
 RUN apk add --no-cache chromium \
     && addgroup -S app \
