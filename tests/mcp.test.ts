@@ -97,7 +97,9 @@ describe("MCP gateway", () => {
 
     const listed = await rpc(base, token, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, sessionId!);
     const listPayload = await readRpcJson<{ result: { tools: Array<{ name: string }> } }>(listed);
-    expect(listPayload.result.tools.map((tool) => tool.name)).toContain("wp__novamira_read-file");
+    const toolNames = listPayload.result.tools.map((tool) => tool.name);
+    expect(toolNames).toContain("wp__novamira_read-file");
+    expect(toolNames).toContain("wp__simpli_rank-math-get-live-seo-score");
 
     const called = await rpc(base, token, {
       jsonrpc: "2.0",
