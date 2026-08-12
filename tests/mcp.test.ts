@@ -13,7 +13,7 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
 });
 
-async function listen(): Promise<{ base: string; token: string }> {
+async function listen(): Promise<{ base: string; token: string; fake: ReturnType<typeof makeWordPressFetch> }> {
   const fake = makeWordPressFetch();
   const logger = createLogger(testConfig);
   const wordpress = new WordPressClient(testConfig, logger, fake.fetch);
@@ -23,7 +23,7 @@ async function listen(): Promise<{ base: string; token: string }> {
   await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Test server did not bind");
-  return { base: `http://127.0.0.1:${address.port}`, token: testConfig.staticToken! };
+  return { base: `http://127.0.0.1:${address.port}`, token: testConfig.staticToken!, fake };
 }
 
 async function rpc(base: string, token: string, body: unknown, sessionId?: string): Promise<Response> {
@@ -73,7 +73,7 @@ describe("MCP gateway", () => {
     expect(response.headers.get("www-authenticate")).toContain("oauth-protected-resource");
   });
 
-  it("initializes, lists mirrored abilities, and runs a read-only tool", async () => {
+  it("initializes, stays within the connector tool cap, exposes live Rank Math scoring, and runs a read-only tool", async () => {
     const { base, token } = await listen();
     const initialized = await rpc(base, token, {
       jsonrpc: "2.0",
@@ -98,8 +98,10 @@ describe("MCP gateway", () => {
     const listed = await rpc(base, token, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, sessionId!);
     const listPayload = await readRpcJson<{ result: { tools: Array<{ name: string }> } }>(listed);
     const toolNames = listPayload.result.tools.map((tool) => tool.name);
+    expect(toolNames.length).toBeLessThanOrEqual(190);
     expect(toolNames).toContain("wp__novamira_read-file");
     expect(toolNames).toContain("wp__simpli_rank-math-get-live-seo-score");
+    expect(toolNames).not.toContain("wordpress_refresh_ability_catalog");
 
     const called = await rpc(base, token, {
       jsonrpc: "2.0",
@@ -110,5 +112,50 @@ describe("MCP gateway", () => {
     const callPayload = await readRpcJson<{ result: { isError?: boolean; structuredContent?: { result?: { ok?: boolean } } } }>(called);
     expect(callPayload.result.isError).not.toBe(true);
     expect(callPayload.result.structuredContent?.result?.ok).toBe(true);
+  });
+
+  it("requires the destructive confirmation, strips it, and forwards the ability over POST", async () => {
+    const { base, token, fake } = await listen();
+    const initialized = await rpc(base, token, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "vitest", version: "1.0.0" },
+      },
+    });
+    const sessionId = initialized.headers.get("mcp-session-id");
+    expect(sessionId).toBeTruthy();
+    await rpc(base, token, { jsonrpc: "2.0", method: "notifications/initialized" }, sessionId!);
+
+    const rejected = await rpc(base, token, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "wp__novamira_delete-file", arguments: { path: "wp-content/test.txt" } },
+    }, sessionId!);
+    const rejectedPayload = await readRpcJson<{ result: { isError?: boolean } }>(rejected);
+    expect(rejectedPayload.result.isError).toBe(true);
+
+    const accepted = await rpc(base, token, {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: {
+        name: "wp__novamira_delete-file",
+        arguments: {
+          path: "wp-content/test.txt",
+          _confirm: "RUN novamira/delete-file",
+        },
+      },
+    }, sessionId!);
+    const acceptedPayload = await readRpcJson<{ result: { isError?: boolean } }>(accepted);
+    expect(acceptedPayload.result.isError).not.toBe(true);
+
+    const deleteCall = fake.calls.find((call) => call.url.pathname.endsWith("/novamira/delete-file/run"));
+    expect(deleteCall?.init?.method).toBe("POST");
+    expect(deleteCall?.init?.body).toBe('{"input":{"path":"wp-content/test.txt"}}');
   });
 });
