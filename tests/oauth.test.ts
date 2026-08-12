@@ -48,6 +48,10 @@ describe("OAuth 2.1", () => {
       resource: testConfig.resourceUrl,
       admin_password: testConfig.oauthAdminPassword!,
     });
+    const authorizationPage = await fetch(`${base}/oauth/authorize?${form.toString()}`);
+    expect(authorizationPage.status).toBe(200);
+    expect(authorizationPage.headers.get("cross-origin-opener-policy")).toBe("unsafe-none");
+
     const authorization = await fetch(`${base}/oauth/authorize`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -55,6 +59,7 @@ describe("OAuth 2.1", () => {
       redirect: "manual",
     });
     expect(authorization.status).toBe(303);
+    expect(authorization.headers.get("cross-origin-opener-policy")).toBe("unsafe-none");
     const location = new URL(authorization.headers.get("location")!);
     expect(location.searchParams.get("state")).toBe("state-123");
     const code = location.searchParams.get("code")!;
