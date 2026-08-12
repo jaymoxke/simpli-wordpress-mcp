@@ -223,7 +223,7 @@ export function createMcpServer(
     requireScope(auth, "wordpress:read");
     const abilities = await wordpress.listAbilities();
     const abilityTools = abilities.map(abilityToMcpTool);
-    return { tools: [...gatewayTools, ...abilityTools] };
+    return { tools: [...gatewayTools.filter((tool) => tool.name !== REFRESH_TOOL), ...abilityTools] };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
