@@ -5,8 +5,8 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "node dist/server.js",
-    "healthcheckPath": "/ready",
+    "startCommand": "node dist/src/diagnostic-contract.js",
+    "healthcheckPath": "/",
     "healthcheckTimeout": 60,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3
