@@ -167,7 +167,7 @@ describe("Simpli Railway MCP", () => {
         name: "simpli_execute",
         arguments: {
           ability_name: "wordpress/site-info.get",
-          input: legacyArguments,
+          input: {},
         },
       },
     });
