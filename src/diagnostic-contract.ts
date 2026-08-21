@@ -13,9 +13,14 @@ const server = createServer(async (_req, res) => {
     const snapshot = await wordpress.getToolSnapshot(true);
     const names = ["simpli_catalog", "simpli_describe", "simpli_execute"];
     const tools = Object.fromEntries(names.map((name) => [name, snapshot.tools.find((tool) => tool.name === name) ?? null]));
+    const legacyRead = await wordpress.callTool("simpli_execute", {
+      ability_name: "core/get-site-info",
+      input: { fields: ["name", "url", "version"] },
+    });
     if (!dumped) {
       dumped = true;
       console.error(`SIMPLI_CONTRACT_DUMP ${JSON.stringify(tools)}`);
+      console.error(`SIMPLI_LEGACY_READ_CANARY ${JSON.stringify(legacyRead.structuredContent ?? legacyRead.content ?? null)}`);
     }
     res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
     res.end(JSON.stringify({ ok: true, toolCount: snapshot.tools.length }));
