@@ -1,8 +1,8 @@
 {
   "name": "simpli-wordpress-mcp",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Railway-hosted OAuth MCP gateway for WordPress Abilities and Novamira.",
+  "description": "Railway-hosted first-party Simpli MCP gateway for governed Simpli WordPress operations.",
   "type": "module",
   "engines": {
     "node": ">=22 <25"
