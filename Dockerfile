@@ -8,6 +8,9 @@ COPY tests ./tests
 RUN npm run check
 RUN npm test
 RUN npm run build
+RUN test -f dist/src/server.js \
+    && printf 'import "./src/server.js";\n' > dist/server.js \
+    && node --check dist/server.js
 
 FROM node:22-alpine AS runtime
 ENV NODE_ENV=production
