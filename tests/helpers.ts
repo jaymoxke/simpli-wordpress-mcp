@@ -1,6 +1,6 @@
 import type { AppConfig } from "../src/config.js";
 import type { Logger } from "../src/logger.js";
-import type { WordPressAbility } from "../src/wordpress.js";
+import type { SimpliBackendTool } from "../src/wordpress.js";
 
 export const testConfig: AppConfig = {
   port: 3000,
@@ -27,88 +27,104 @@ export const silentLogger: Logger = {
   error: () => undefined,
 };
 
-export const fakeAbilities: WordPressAbility[] = [
+export const fakeTools: SimpliBackendTool[] = [
   {
-    name: "core/get-site-info",
-    label: "Get Site Information",
-    category: "site",
-    input_schema: { type: "object", properties: {}, additionalProperties: false },
-    meta: { annotations: { readonly: true, destructive: false, idempotent: true } },
+    name: "simpli_self_status",
+    title: "Simpli MCP Self Status",
+    description: "Read Simpli MCP status.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
-    name: "novamira/read-file",
-    label: "Read File",
-    description: "Read a WordPress file.",
-    category: "novamira",
-    input_schema: {
+    name: "simpli_get_code_file",
+    title: "Get Simpli MCP Code File",
+    description: "Read an allowlisted Simpli MCP file.",
+    inputSchema: {
       type: "object",
-      properties: { path: { type: "string" } },
-      required: ["path"],
+      properties: { file_key: { type: "string" } },
+      required: ["file_key"],
       additionalProperties: false,
     },
-    meta: { annotations: { readonly: true, destructive: false, idempotent: true } },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
-    name: "novamira/write-file",
-    label: "Write File",
-    description: "Write a WordPress file.",
-    category: "novamira",
-    input_schema: {
+    name: "simpli_patch_code_file",
+    title: "Patch Simpli MCP Code File",
+    description: "Patch an allowlisted Simpli MCP file with governed controls.",
+    inputSchema: {
       type: "object",
-      properties: { path: { type: "string" }, content: { type: "string" } },
-      required: ["path", "content"],
+      properties: {
+        file_key: { type: "string" },
+        expected_sha256: { type: "string" },
+        old_string: { type: "string" },
+        new_string: { type: "string" },
+        authority_ref: { type: "string" },
+        _confirm: { type: "string", const: "RUN simpli_patch_code_file" },
+      },
+      required: ["file_key", "expected_sha256", "old_string", "new_string", "authority_ref", "_confirm"],
       additionalProperties: false,
     },
-    meta: { annotations: { readonly: false, destructive: false, idempotent: true } },
-  },
-  {
-    name: "novamira/delete-file",
-    label: "Delete File",
-    description: "Delete a WordPress file.",
-    category: "novamira",
-    input_schema: {
-      type: "object",
-      properties: { path: { type: "string" } },
-      required: ["path"],
-      additionalProperties: false,
-    },
-    meta: { annotations: { readonly: false, destructive: true, idempotent: true } },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
 ];
 
 export interface FetchCall {
   url: URL;
   init?: RequestInit;
+  body?: Record<string, unknown>;
 }
 
-export function makeWordPressFetch(abilities: WordPressAbility[] = fakeAbilities): {
+export function makeWordPressFetch(tools: SimpliBackendTool[] = fakeTools): {
   fetch: typeof fetch;
   calls: FetchCall[];
 } {
   const calls: FetchCall[] = [];
   const fakeFetch = async (input: URL | RequestInfo, init?: RequestInit): Promise<Response> => {
     const url = new URL(input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url);
-    calls.push({ url, ...(init ? { init } : {}) });
-    if (url.pathname === "/wp-json/wp-abilities/v1/abilities") {
-      return new Response(JSON.stringify(abilities), {
-        status: 200,
-        headers: { "Content-Type": "application/json", "X-WP-TotalPages": "1" },
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+    calls.push({ url, ...(init ? { init } : {}), ...(body ? { body } : {}) });
+
+    if (url.pathname !== "/wp-json/simpli-mcp/v1/mcp" || init?.method !== "POST" || !body) {
+      return new Response(JSON.stringify({ code: "not_found", message: "Not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
       });
     }
-    if (url.pathname.endsWith("/core/get-site-info/run")) {
-      return new Response(JSON.stringify({ name: "Test WordPress", version: "7.0.3" }), {
+
+    const id = body.id ?? null;
+    if (body.method === "tools/list") {
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id, result: { tools } }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     }
-    if (url.pathname.endsWith("/run")) {
-      return new Response(
-        JSON.stringify({ ok: true, method: init?.method ?? "GET", input: url.searchParams.get("input") ?? init?.body ?? null }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
+
+    if (body.method === "tools/call") {
+      const params = body.params as { name?: string; arguments?: Record<string, unknown> } | undefined;
+      if (params?.name === "simpli_self_status") {
+        return new Response(JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            structuredContent: { state: "STATE_VERIFIED", version: "0.2.0" },
+            content: [{ type: "text", text: "status" }],
+            isError: false,
+          },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        result: {
+          structuredContent: { ok: true, tool: params?.name, arguments: params?.arguments ?? {} },
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        },
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
-    return new Response(JSON.stringify({ code: "not_found", message: "Not found" }), {
-      status: 404,
+
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } }), {
+      status: 200,
       headers: { "Content-Type": "application/json" },
     });
   };
