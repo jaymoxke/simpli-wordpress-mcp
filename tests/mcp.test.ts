@@ -3,17 +3,36 @@ import type { Server as HttpServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { createLogger } from "../src/logger.js";
 import { createApp } from "../src/server.js";
-import { WordPressClient } from "../src/wordpress.js";
+import { WordPressClient, type SimpliBackendTool } from "../src/wordpress.js";
 import { fakeTools, makeWordPressFetch, testConfig } from "./helpers.js";
 
 const servers: HttpServer[] = [];
+
+const dispatcherTool: SimpliBackendTool = {
+  name: "simpli_execute",
+  description: "Stable dispatcher for Simpli-owned abilities.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      ability_name: { type: "string" },
+      input: { type: "object" },
+      authority_ref: { type: "string" },
+      _confirm: { type: "string" },
+    },
+    required: ["ability_name", "input"],
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+};
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
 });
 
-async function listen(): Promise<{ base: string; token: string; fake: ReturnType<typeof makeWordPressFetch> }> {
-  const fake = makeWordPressFetch();
+async function listen(
+  tools: SimpliBackendTool[] = fakeTools,
+): Promise<{ base: string; token: string; fake: ReturnType<typeof makeWordPressFetch> }> {
+  const fake = makeWordPressFetch(tools);
   const logger = createLogger(testConfig);
   const wordpress = new WordPressClient(testConfig, logger, fake.fetch);
   const { app } = createApp(testConfig, logger, wordpress);
@@ -126,5 +145,45 @@ describe("Simpli Railway MCP", () => {
     expect(forwarded?.body).toMatchObject({
       params: { name: "simpli_patch_code_file", arguments: argumentsPayload },
     });
+  });
+
+  it("routes the verified stale site-info tool through the governed Simpli dispatcher", async () => {
+    const { base, token, fake } = await listen([...fakeTools, dispatcherTool]);
+    const sessionId = await initializedSession(base, token);
+    const legacyArguments = { fields: ["name", "url", "version"] };
+    const called = await rpc(base, token, {
+      jsonrpc: "2.0",
+      id: 5,
+      method: "tools/call",
+      params: { name: "wp__core_get-site-info", arguments: legacyArguments },
+    }, sessionId);
+    const payload = await readRpcJson<{ result: { isError?: boolean } }>(called);
+    expect(payload.result.isError).not.toBe(true);
+
+    const forwarded = fake.calls.find((call) => call.body?.method === "tools/call" &&
+      (call.body.params as { name?: string } | undefined)?.name === "simpli_execute");
+    expect(forwarded?.body).toMatchObject({
+      params: {
+        name: "simpli_execute",
+        arguments: {
+          ability_name: "wordpress/site-info.get",
+          input: legacyArguments,
+        },
+      },
+    });
+  });
+
+  it("fails closed for stale tools without a verified Simpli v2 equivalent", async () => {
+    const { base, token } = await listen([...fakeTools, dispatcherTool]);
+    const sessionId = await initializedSession(base, token);
+    const called = await rpc(base, token, {
+      jsonrpc: "2.0",
+      id: 6,
+      method: "tools/call",
+      params: { name: "wp__novamira_execute-php", arguments: { code: "echo 'x';" } },
+    }, sessionId);
+    const payload = await readRpcJson<{ result: { isError?: boolean; structuredContent?: { status?: number } } }>(called);
+    expect(payload.result.isError).toBe(true);
+    expect(payload.result.structuredContent?.status).toBe(410);
   });
 });
