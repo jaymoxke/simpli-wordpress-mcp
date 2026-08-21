@@ -1,9 +1,5 @@
 import type { AppConfig } from "./config.js";
 import type { Logger } from "./logger.js";
-import { RankMathLiveScoreService } from "./rankmath-live-score.js";
-
-export type JsonPrimitive = string | number | boolean | null;
-export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 export interface JsonSchema {
   type?: string | string[];
@@ -13,34 +9,57 @@ export interface JsonSchema {
   required?: string[];
   additionalProperties?: boolean | JsonSchema;
   items?: JsonSchema | JsonSchema[];
-  default?: JsonValue;
-  enum?: JsonValue[];
+  default?: unknown;
+  enum?: unknown[];
+  const?: unknown;
   [key: string]: unknown;
 }
 
-export interface AbilityAnnotations {
-  readonly?: boolean;
-  destructive?: boolean;
-  idempotent?: boolean;
-  instructions?: string;
-}
-
-export interface WordPressAbility {
+export interface SimpliBackendTool {
   name: string;
-  label?: string;
+  title?: string;
   description?: string;
-  category?: string;
-  input_schema?: unknown;
-  output_schema?: JsonSchema;
-  meta?: {
-    annotations?: AbilityAnnotations;
+  inputSchema: JsonSchema;
+  outputSchema?: JsonSchema;
+  annotations?: {
+    title?: string;
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+    openWorldHint?: boolean;
     [key: string]: unknown;
   };
+  securitySchemes?: unknown[];
   [key: string]: unknown;
 }
 
-export interface AbilitySnapshot {
-  abilities: WordPressAbility[];
+interface JsonRpcResponse<T> {
+  jsonrpc: "2.0";
+  id: string | number | null;
+  result?: T;
+  error?: {
+    code: number;
+    message: string;
+    data?: unknown;
+  };
+}
+
+interface BackendToolsListResult {
+  tools?: SimpliBackendTool[];
+  resultType?: string;
+  ttlMs?: number;
+  cacheScope?: string;
+}
+
+interface BackendToolCallResult {
+  structuredContent?: unknown;
+  content?: unknown;
+  isError?: boolean;
+  resultType?: string;
+}
+
+export interface ToolSnapshot {
+  tools: SimpliBackendTool[];
   refreshedAt: string;
   expiresAt: string;
   stale: boolean;
@@ -57,386 +76,167 @@ export class WordPressRequestError extends Error {
   }
 }
 
-export const LIVE_RANK_MATH_SCORE_ABILITY: WordPressAbility = {
-  name: "simpli/rank-math-get-live-seo-score",
-  label: "Get live Rank Math SEO score",
-  category: "rank-math",
-  description:
-    "Opens the real WordPress editor in an isolated headless Chromium session and reads Rank Math's client-side getAnalysisScore() only after the analysis is stable and not refreshing. Use this when an exact current Rank Math score is required; do not substitute stored rank_math_seo_score metadata.",
-  input_schema: {
-    type: "object",
-    required: ["post_id"],
-    properties: {
-      post_id: {
-        type: "integer",
-        minimum: 1,
-        description: "WordPress post ID whose live Rank Math editor score should be verified.",
-      },
-    },
-    additionalProperties: false,
-  },
-  output_schema: {
-    type: "object",
-    required: ["post_id", "seo_score", "source", "verification", "stale", "editor", "observed_at"],
-    properties: {
-      post_id: { type: "integer" },
-      seo_score: { type: "integer" },
-      source: { type: "string" },
-      verification: { type: "string" },
-      stale: { type: "boolean" },
-      editor: { type: "string" },
-      stable_samples: { type: "integer" },
-      observed_at: { type: "string" },
-    },
-  },
-  meta: {
-    annotations: {
-      readonly: true,
-      destructive: false,
-      idempotent: true,
-      instructions:
-        "This is the authoritative exact-score path. It uses a temporary one-time wp-admin session, waits for Rank Math's Redux store to finish refreshing, and rejects unstable or unavailable scores instead of falling back to stored zero values.",
-    },
-  },
-};
-
-function abilityPath(name: string): string {
-  const parts = name.split("/");
-  if (parts.length !== 2 || !parts[0] || !parts[1]) throw new Error(`Invalid ability name: ${name}`);
-  return `${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}`;
-}
-
-function isSchemaObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function appendAbilityInputQuery(
-  query: Record<string, string>,
-  key: string,
-  value: unknown,
-): void {
-  if (value === undefined) return;
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => appendAbilityInputQuery(query, `${key}[${index}]`, item));
-    return;
-  }
-  if (isSchemaObject(value)) {
-    for (const [name, child] of Object.entries(value)) {
-      appendAbilityInputQuery(query, `${key}[${name}]`, child);
-    }
-    return;
-  }
-  query[key] = value === null ? "" : String(value);
-}
-
-function serializeAbilityInputQuery(input: unknown): Record<string, string> | undefined {
-  if (input === undefined || input === null) return undefined;
-  const query: Record<string, string> = {};
-  appendAbilityInputQuery(query, "input", input);
-  return Object.keys(query).length > 0 ? query : undefined;
-}
-
-// WordPress accepts boolean `required` markers and serializes empty PHP arrays
-// as `[]`; MCP tool definitions need standard JSON Schema object maps and
-// string-array `required` declarations.
-function normalizeSchemaMap(value: unknown): Record<string, JsonSchema> {
-  if (!isSchemaObject(value)) return {};
-  return Object.fromEntries(
-    Object.entries(value).map(([name, child]) => [name, normalizeSchemaNode(child)]),
-  );
-}
-
-function normalizeSchemaNode(value: unknown): JsonSchema {
-  if (!isSchemaObject(value)) return {};
-
-  const normalized: Record<string, unknown> = { ...value };
-  const inferredRequired: string[] = [];
-
-  if ("properties" in value) {
-    const properties: Record<string, JsonSchema> = {};
-    if (isSchemaObject(value.properties)) {
-      for (const [name, child] of Object.entries(value.properties)) {
-        properties[name] = normalizeSchemaNode(child);
-        if (isSchemaObject(child) && child.required === true) inferredRequired.push(name);
-      }
-    }
-    normalized.properties = properties;
-  } else if (value.type === "object") {
-    normalized.properties = {};
-  }
-
-  const declaredRequired = Array.isArray(value.required)
-    ? value.required.filter((name): name is string => typeof name === "string" && name.length > 0)
-    : [];
-  const required = [...new Set([...declaredRequired, ...inferredRequired])];
-  if (required.length > 0) normalized.required = required;
-  else delete normalized.required;
-
-  for (const keyword of ["patternProperties", "$defs", "definitions", "dependentSchemas"] as const) {
-    if (keyword in value) normalized[keyword] = normalizeSchemaMap(value[keyword]);
-  }
-
-  for (const keyword of ["allOf", "anyOf", "oneOf", "prefixItems"] as const) {
-    if (!(keyword in value)) continue;
-    normalized[keyword] = Array.isArray(value[keyword])
-      ? value[keyword].map((child) => normalizeSchemaNode(child))
-      : [];
-  }
-
-  if ("items" in value) {
-    normalized.items = Array.isArray(value.items)
-      ? value.items.map((child) => normalizeSchemaNode(child))
-      : normalizeSchemaNode(value.items);
-  }
-
-  for (const keyword of [
-    "contains",
-    "propertyNames",
-    "not",
-    "if",
-    "then",
-    "else",
-    "unevaluatedItems",
-  ] as const) {
-    if (!(keyword in value)) continue;
-    const child = value[keyword];
-    if (typeof child === "boolean") normalized[keyword] = child;
-    else normalized[keyword] = normalizeSchemaNode(child);
-  }
-
-  for (const keyword of ["additionalProperties", "unevaluatedProperties"] as const) {
-    if (!(keyword in value)) continue;
-    const child = value[keyword];
-    if (typeof child === "boolean") normalized[keyword] = child;
-    else normalized[keyword] = normalizeSchemaNode(child);
-  }
-
-  return normalized as JsonSchema;
-}
-
-function emptyInputSchema(): JsonSchema {
-  return { type: "object", properties: {}, additionalProperties: false };
-}
-
-function normalizeInputSchema(schema: unknown): JsonSchema {
-  if (!isSchemaObject(schema)) return emptyInputSchema();
-
-  const inputIsRequired = schema.required === true;
-  const normalized = normalizeSchemaNode(schema);
-  if (
-    normalized.type === "object" ||
-    (Array.isArray(normalized.type) && normalized.type.includes("object")) ||
-    "properties" in normalized ||
-    "required" in normalized ||
-    "additionalProperties" in normalized
-  ) {
-    return {
-      ...normalized,
-      type: "object",
-      properties: normalizeSchemaMap(normalized.properties),
-    };
-  }
-  if (Object.keys(normalized).length === 0) return emptyInputSchema();
+function normalizeTool(value: unknown): SimpliBackendTool | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const tool = value as Record<string, unknown>;
+  if (typeof tool.name !== "string" || !tool.name.trim()) return null;
+  const inputSchema =
+    typeof tool.inputSchema === "object" && tool.inputSchema !== null && !Array.isArray(tool.inputSchema)
+      ? (tool.inputSchema as JsonSchema)
+      : { type: "object", properties: {}, additionalProperties: false };
   return {
-    type: "object",
-    properties: { input: normalized },
-    ...(inputIsRequired ? { required: ["input"] } : {}),
-    additionalProperties: false,
+    ...tool,
+    name: tool.name,
+    ...(typeof tool.title === "string" ? { title: tool.title } : {}),
+    ...(typeof tool.description === "string" ? { description: tool.description } : {}),
+    inputSchema,
+    ...(typeof tool.outputSchema === "object" && tool.outputSchema !== null && !Array.isArray(tool.outputSchema)
+      ? { outputSchema: tool.outputSchema as JsonSchema }
+      : {}),
+    ...(typeof tool.annotations === "object" && tool.annotations !== null && !Array.isArray(tool.annotations)
+      ? { annotations: tool.annotations as SimpliBackendTool["annotations"] }
+      : {}),
   };
-}
-
-export function getAbilityInputSchema(ability: WordPressAbility): JsonSchema {
-  return normalizeInputSchema(ability.input_schema);
-}
-
-export function getAbilityAnnotations(ability: WordPressAbility): Required<Pick<AbilityAnnotations, "readonly" | "destructive" | "idempotent">> & Pick<AbilityAnnotations, "instructions"> {
-  const annotations = ability.meta?.annotations ?? {};
-  const forcedDangerous = [
-    "novamira/execute-php",
-    "novamira/run-wp-cli",
-    "novamira/create-admin-access-link",
-  ].includes(ability.name);
-  return {
-    readonly: forcedDangerous ? false : annotations.readonly === true,
-    destructive: forcedDangerous || annotations.destructive === true,
-    idempotent: annotations.idempotent === true,
-    ...(annotations.instructions ? { instructions: annotations.instructions } : {}),
-  };
-}
-
-export function abilityToToolName(abilityName: string): string {
-  const safe = abilityName
-    .toLowerCase()
-    .replaceAll("/", "__")
-    .replace(/[^a-z0-9_-]/g, "_")
-    .replace(/_+/g, "_");
-  return `wp__${safe}`.slice(0, 128);
 }
 
 export class WordPressClient {
-  private cache?: { abilities: WordPressAbility[]; refreshedAt: number };
-  private refreshPromise: Promise<WordPressAbility[]> | undefined;
+  private cache?: { tools: SimpliBackendTool[]; refreshedAt: number };
+  private refreshPromise: Promise<SimpliBackendTool[]> | undefined;
+  private readonly endpoint: URL;
 
   constructor(
     private readonly config: AppConfig,
     private readonly logger: Logger,
     private readonly fetchImpl: typeof fetch = fetch,
-  ) {}
+  ) {
+    this.endpoint = new URL(`${config.wordpressUrl}/wp-json/simpli-mcp/v1/mcp`);
+  }
 
-  async getAbilitySnapshot(force = false): Promise<AbilitySnapshot> {
-    const abilities = await this.listAbilities(force);
+  async getToolSnapshot(force = false): Promise<ToolSnapshot> {
+    const tools = await this.listTools(force);
     const refreshedAt = this.cache?.refreshedAt ?? Date.now();
     const expiresAt = refreshedAt + this.config.abilityCacheTtlMs;
     return {
-      abilities,
+      tools,
       refreshedAt: new Date(refreshedAt).toISOString(),
       expiresAt: new Date(expiresAt).toISOString(),
       stale: Date.now() >= expiresAt,
     };
   }
 
-  async listAbilities(force = false): Promise<WordPressAbility[]> {
+  async listTools(force = false): Promise<SimpliBackendTool[]> {
     const now = Date.now();
     if (!force && this.cache && now - this.cache.refreshedAt < this.config.abilityCacheTtlMs) {
-      return this.cache.abilities;
+      return this.cache.tools;
     }
     if (this.refreshPromise) return this.refreshPromise;
 
-    this.refreshPromise = this.fetchAllAbilities()
-      .then((abilities) => {
-        this.cache = { abilities, refreshedAt: Date.now() };
-        this.logger.info("WordPress ability catalog refreshed", {
-          abilityCount: abilities.length,
-          novamiraCount: abilities.filter((ability) => ability.name.startsWith("novamira/")).length,
+    this.refreshPromise = this.rpc<BackendToolsListResult>("tools/list", {})
+      .then((result) => {
+        const tools = Array.isArray(result.tools)
+          ? result.tools.map(normalizeTool).filter((tool): tool is SimpliBackendTool => tool !== null)
+          : [];
+        if (tools.length === 0) {
+          throw new WordPressRequestError("Simpli MCP backend returned no tools", 502, result);
+        }
+        const seen = new Set<string>();
+        const unique = tools.filter((tool) => {
+          if (seen.has(tool.name)) return false;
+          seen.add(tool.name);
+          return true;
         });
-        return abilities;
+        this.cache = { tools: unique, refreshedAt: Date.now() };
+        this.logger.info("Simpli MCP backend tool catalog refreshed", {
+          toolCount: unique.length,
+          tools: unique.map((tool) => tool.name),
+        });
+        return unique;
       })
       .catch((error) => {
         if (this.cache) {
-          this.logger.warn("Ability refresh failed; using stale catalog", {
+          this.logger.warn("Simpli MCP backend refresh failed; using stale catalog", {
             error: error instanceof Error ? error.message : String(error),
-            abilityCount: this.cache.abilities.length,
+            toolCount: this.cache.tools.length,
           });
-          return this.cache.abilities;
+          return this.cache.tools;
         }
         throw error;
       })
       .finally(() => {
         this.refreshPromise = undefined;
       });
+
     return this.refreshPromise;
   }
 
-  private async fetchAllAbilities(): Promise<WordPressAbility[]> {
-    const abilities: WordPressAbility[] = [];
-    for (let page = 1; page <= 100; page += 1) {
-      const response = await this.request<WordPressAbility[]>("GET", "/wp-abilities/v1/abilities", {
-        query: { page: String(page), per_page: "100" },
-        includeResponse: true,
-      });
-      const items = response.data;
-      if (!Array.isArray(items)) throw new WordPressRequestError("Abilities response was not an array", 502);
-      abilities.push(...items);
-      const totalPages = Number(response.headers.get("x-wp-totalpages") ?? "0");
-      if ((totalPages > 0 && page >= totalPages) || items.length < 100) break;
+  async getTool(name: string, refreshIfMissing = true): Promise<SimpliBackendTool> {
+    let tools = await this.listTools();
+    let tool = tools.find((candidate) => candidate.name === name);
+    if (!tool && refreshIfMissing) {
+      tools = await this.listTools(true);
+      tool = tools.find((candidate) => candidate.name === name);
     }
-    abilities.push(LIVE_RANK_MATH_SCORE_ABILITY);
-    const seen = new Set<string>();
-    return abilities.filter((ability) => {
-      if (!ability?.name || seen.has(ability.name)) return false;
-      seen.add(ability.name);
-      return true;
+    if (!tool) throw new WordPressRequestError(`Simpli MCP tool not found: ${name}`, 404);
+    return tool;
+  }
+
+  async callTool(name: string, input: Record<string, unknown>): Promise<BackendToolCallResult> {
+    await this.getTool(name);
+    const result = await this.rpc<BackendToolCallResult>("tools/call", {
+      name,
+      arguments: input,
     });
+    if (result.isError === true) {
+      const details = result.structuredContent ?? result.content ?? result;
+      const message =
+        typeof result.structuredContent === "object" &&
+        result.structuredContent !== null &&
+        "message" in result.structuredContent
+          ? String((result.structuredContent as { message: unknown }).message)
+          : `Simpli MCP backend tool failed: ${name}`;
+      throw new WordPressRequestError(message, 502, details);
+    }
+    return result;
   }
 
-  async getAbility(name: string, refreshIfMissing = true): Promise<WordPressAbility> {
-    let abilities = await this.listAbilities();
-    let ability = abilities.find((candidate) => candidate.name === name);
-    if (!ability && refreshIfMissing) {
-      abilities = await this.listAbilities(true);
-      ability = abilities.find((candidate) => candidate.name === name);
-    }
-    if (!ability) throw new WordPressRequestError(`WordPress ability not found: ${name}`, 404);
-    return ability;
-  }
-
-  private resolveAbilityRunUrl(ability: WordPressAbility): string | URL {
-    const fallback = `/wp-abilities/v1/${abilityPath(ability.name)}/run`;
-    if (!isSchemaObject(ability._links) || !("wp:action-run" in ability._links)) return fallback;
-
-    const actionLinks = ability._links["wp:action-run"];
-    const href = Array.isArray(actionLinks)
-      ? actionLinks.find((link) => isSchemaObject(link) && typeof link.href === "string" && link.href.length > 0)?.href
-      : undefined;
-    if (typeof href !== "string") {
-      throw new WordPressRequestError(`WordPress advertised an invalid action-run URL for ${ability.name}`, 502);
-    }
-
-    let url: URL;
+  async readiness(): Promise<{
+    ready: boolean;
+    toolCount: number;
+    backend: "simpli-mcp";
+    backendVersion?: string;
+    lastRefresh?: string;
+    error?: string;
+  }> {
     try {
-      url = new URL(href, `${this.config.wordpressUrl}/`);
-    } catch {
-      throw new WordPressRequestError(`WordPress advertised an invalid action-run URL for ${ability.name}`, 502);
-    }
-
-    const wordpressOrigin = new URL(this.config.wordpressUrl).origin;
-    if (url.origin !== wordpressOrigin || url.username || url.password) {
-      throw new WordPressRequestError(`WordPress action-run URL failed same-origin validation for ${ability.name}`, 502);
-    }
-    url.hash = "";
-    return url;
-  }
-
-  async runAbility(name: string, input: unknown): Promise<unknown> {
-    if (name === LIVE_RANK_MATH_SCORE_ABILITY.name) {
-      return new RankMathLiveScoreService(this.config, this.logger, this.fetchImpl).getScore(input);
-    }
-    const ability = await this.getAbility(name);
-    const annotations = getAbilityAnnotations(ability);
-    const path = this.resolveAbilityRunUrl(ability);
-    if (annotations.readonly) {
-      const query = serializeAbilityInputQuery(input);
-      return (await this.request<unknown>("GET", path, { ...(query ? { query } : {}) })).data;
-    }
-    return (await this.request<unknown>("POST", path, { body: { input: input ?? {} } })).data;
-  }
-
-  async getSiteInfo(): Promise<unknown> {
-    return this.runAbility("core/get-site-info", {});
-  }
-
-  async readiness(): Promise<{ ready: boolean; abilityCount: number; novamiraCount: number; lastRefresh?: string; error?: string }> {
-    try {
-      const snapshot = await this.getAbilitySnapshot();
+      const [snapshot, statusResult] = await Promise.all([
+        this.getToolSnapshot(),
+        this.callTool("simpli_self_status", {}),
+      ]);
+      const structured = statusResult.structuredContent;
+      const backendVersion =
+        typeof structured === "object" && structured !== null && "version" in structured
+          ? String((structured as { version: unknown }).version)
+          : undefined;
       return {
-        ready: snapshot.abilities.length > 0,
-        abilityCount: snapshot.abilities.length,
-        novamiraCount: snapshot.abilities.filter((ability) => ability.name.startsWith("novamira/")).length,
+        ready: snapshot.tools.length > 0,
+        toolCount: snapshot.tools.length,
+        backend: "simpli-mcp",
+        ...(backendVersion ? { backendVersion } : {}),
         lastRefresh: snapshot.refreshedAt,
       };
     } catch (error) {
       return {
         ready: false,
-        abilityCount: this.cache?.abilities.length ?? 0,
-        novamiraCount: this.cache?.abilities.filter((ability) => ability.name.startsWith("novamira/")).length ?? 0,
+        toolCount: this.cache?.tools.length ?? 0,
+        backend: "simpli-mcp",
         error: error instanceof Error ? error.message : String(error),
       };
     }
   }
 
-  private async request<T>(
-    method: "GET" | "POST" | "DELETE",
-    route: string | URL,
-    options: {
-      query?: Record<string, string>;
-      body?: unknown;
-      includeResponse?: boolean;
-    } = {},
-  ): Promise<{ data: T; headers: Headers }> {
-    const url = route instanceof URL
-      ? new URL(route.toString())
-      : new URL(`${this.config.wordpressUrl}/wp-json${route}`);
-    for (const [key, value] of Object.entries(options.query ?? {})) url.searchParams.set(key, value);
+  private async rpc<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = `railway-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const payload = { jsonrpc: "2.0", id, method, params };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.config.wordpressTimeoutMs);
     const authorization = Buffer.from(
@@ -445,15 +245,15 @@ export class WordPressClient {
     ).toString("base64");
 
     try {
-      const response = await this.fetchImpl(url, {
-        method,
+      const response = await this.fetchImpl(this.endpoint, {
+        method: "POST",
         headers: {
           Authorization: `Basic ${authorization}`,
           Accept: "application/json",
-          "User-Agent": "Simpli-WordPress-MCP/1.0",
-          ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
+          "Content-Type": "application/json",
+          "User-Agent": "Simpli-MCP-Railway/2.0",
         },
-        ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+        body: JSON.stringify(payload),
         signal: controller.signal,
         redirect: "error",
       });
@@ -470,17 +270,27 @@ export class WordPressClient {
         const message =
           typeof data === "object" && data !== null && "message" in data
             ? String((data as { message: unknown }).message)
-            : `WordPress returned HTTP ${response.status}`;
+            : `Simpli MCP backend returned HTTP ${response.status}`;
         throw new WordPressRequestError(message, response.status, data);
       }
-      return { data: data as T, headers: response.headers };
+      if (typeof data !== "object" || data === null || Array.isArray(data)) {
+        throw new WordPressRequestError("Simpli MCP backend returned invalid JSON-RPC", 502, data);
+      }
+      const rpc = data as JsonRpcResponse<T>;
+      if (rpc.error) {
+        throw new WordPressRequestError(rpc.error.message, 502, rpc.error);
+      }
+      if (!("result" in rpc)) {
+        throw new WordPressRequestError("Simpli MCP backend JSON-RPC result is missing", 502, rpc);
+      }
+      return rpc.result as T;
     } catch (error) {
       if (error instanceof WordPressRequestError) throw error;
       if (error instanceof Error && error.name === "AbortError") {
-        throw new WordPressRequestError("WordPress request timed out", 504);
+        throw new WordPressRequestError("Simpli MCP backend request timed out", 504);
       }
       throw new WordPressRequestError(
-        error instanceof Error ? `WordPress request failed: ${error.message}` : "WordPress request failed",
+        error instanceof Error ? `Simpli MCP backend request failed: ${error.message}` : "Simpli MCP backend request failed",
         502,
       );
     } finally {
