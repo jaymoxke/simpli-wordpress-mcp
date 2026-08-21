@@ -50,6 +50,26 @@ describe("WordPressClient Simpli MCP backend", () => {
     });
   });
 
+  it("deduplicates concurrent readiness probes and caches a successful result", async () => {
+    const fake = makeWordPressFetch();
+    const client = new WordPressClient(testConfig, silentLogger, fake.fetch);
+
+    const [first, second] = await Promise.all([client.readiness(), client.readiness()]);
+    const third = await client.readiness();
+
+    expect(first.ready).toBe(true);
+    expect(second.ready).toBe(true);
+    expect(third.ready).toBe(true);
+
+    const listCalls = fake.calls.filter((item) => item.body?.method === "tools/list");
+    const statusCalls = fake.calls.filter((item) =>
+      item.body?.method === "tools/call" &&
+      (item.body.params as { name?: string } | undefined)?.name === "simpli_self_status",
+    );
+    expect(listCalls).toHaveLength(1);
+    expect(statusCalls).toHaveLength(1);
+  });
+
   it("fails closed when the backend returns no tools", async () => {
     const fake = makeWordPressFetch([]);
     const client = new WordPressClient(testConfig, silentLogger, fake.fetch);
