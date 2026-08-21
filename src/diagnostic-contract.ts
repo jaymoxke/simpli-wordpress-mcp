@@ -11,15 +11,18 @@ let dumped = false;
 const server = createServer(async (_req, res) => {
   try {
     const snapshot = await wordpress.getToolSnapshot(true);
-    const catalog = await wordpress.callTool("simpli_catalog", {});
+    const siteInfo = await wordpress.callTool("simpli_execute", {
+      ability_name: "wordpress/site-info.get",
+      input: {},
+    });
     if (!dumped) {
       dumped = true;
-      console.error(`SIMPLI_ABILITY_CATALOG ${JSON.stringify(catalog.structuredContent ?? catalog.content ?? null)}`);
+      console.error(`SIMPLI_SITE_INFO_ALIAS_CANARY ${JSON.stringify(siteInfo.structuredContent ?? siteInfo.content ?? null)}`);
     }
     res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
     res.end(JSON.stringify({ ok: true, toolCount: snapshot.tools.length }));
   } catch (error) {
-    console.error(`SIMPLI_CATALOG_ERROR ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`SIMPLI_ALIAS_CANARY_ERROR ${error instanceof Error ? error.message : String(error)}`);
     res.writeHead(500, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "diagnostic_failed" }));
   }
