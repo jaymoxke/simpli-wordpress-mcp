@@ -234,8 +234,14 @@ export async function startServer(config = loadConfig()): Promise<HttpServer> {
   });
   logger.info("Simpli WordPress MCP listening", { port: config.port });
 
-  void wordpress.getAbilitySnapshot(true).catch((error) => {
-    logger.warn("Initial WordPress ability discovery failed", {
+  void wordpress.readiness().then((readiness) => {
+    if (readiness.ready) {
+      logger.info("Simpli MCP backend readiness verified", readiness);
+      return;
+    }
+    logger.warn("Simpli MCP backend readiness failed", readiness);
+  }).catch((error) => {
+    logger.warn("Initial Simpli MCP readiness probe failed", {
       error: error instanceof Error ? error.message : String(error),
     });
   });
