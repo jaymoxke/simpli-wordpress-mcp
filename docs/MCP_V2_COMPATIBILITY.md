@@ -7,3 +7,5 @@ The Railway gateway must therefore treat stale client tool names as a transport-
 Acceptance requires both current Simpli tool discovery for newly connected clients and a verified read-only legacy-call canary for already-connected clients before any compatibility layer is promoted to production.
 
 Railway deployment health uses the local `/health` liveness endpoint. Deep WordPress readiness remains available at `/ready`; its backend probe is deduplicated and successful readiness is cached briefly so concurrent infrastructure checks cannot stampede the WordPress MCP backend.
+
+Legacy `core/get-site-info` compatibility accepts the old optional field filter but normalizes it away before dispatching to the governed `wordpress/site-info.get` v2 ability, whose intentionally minimal response schema is authoritative.
