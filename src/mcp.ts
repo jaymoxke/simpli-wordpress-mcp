@@ -110,6 +110,14 @@ function mapLegacyAbilityName(name: string): { abilityName: string; scope: Gatew
   return LEGACY_ABILITY_ALIASES[name] ?? null;
 }
 
+function mapLegacyAbilityInput(abilityName: string, args: Record<string, unknown>): Record<string, unknown> {
+  // The legacy core/get-site-info tool supported an optional client-side field filter.
+  // The Simpli v2 source of truth intentionally returns its complete minimal site snapshot,
+  // so the filter is transport-only compatibility metadata and must not reach the backend schema.
+  if (abilityName === "wordpress/site-info.get") return {};
+  return args;
+}
+
 async function callCompatibilityTool(
   wordpress: WordPressClient,
   toolName: string,
@@ -156,7 +164,7 @@ async function callCompatibilityTool(
 
   const dispatcherInput: Record<string, unknown> = {
     ability_name: mapped.abilityName,
-    input: args,
+    input: mapLegacyAbilityInput(mapped.abilityName, args),
   };
   if (typeof args.authority_ref === "string" && args.authority_ref.trim()) {
     dispatcherInput.authority_ref = args.authority_ref;
