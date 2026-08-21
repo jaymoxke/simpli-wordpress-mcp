@@ -80,23 +80,26 @@ function normalizeTool(value: unknown): SimpliBackendTool | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const tool = value as Record<string, unknown>;
   if (typeof tool.name !== "string" || !tool.name.trim()) return null;
-  const inputSchema =
-    typeof tool.inputSchema === "object" && tool.inputSchema !== null && !Array.isArray(tool.inputSchema)
-      ? (tool.inputSchema as JsonSchema)
-      : { type: "object", properties: {}, additionalProperties: false };
-  return {
-    ...tool,
+
+  const normalized: SimpliBackendTool = {
     name: tool.name,
-    ...(typeof tool.title === "string" ? { title: tool.title } : {}),
-    ...(typeof tool.description === "string" ? { description: tool.description } : {}),
-    inputSchema,
-    ...(typeof tool.outputSchema === "object" && tool.outputSchema !== null && !Array.isArray(tool.outputSchema)
-      ? { outputSchema: tool.outputSchema as JsonSchema }
-      : {}),
-    ...(typeof tool.annotations === "object" && tool.annotations !== null && !Array.isArray(tool.annotations)
-      ? { annotations: tool.annotations as SimpliBackendTool["annotations"] }
-      : {}),
+    inputSchema:
+      typeof tool.inputSchema === "object" && tool.inputSchema !== null && !Array.isArray(tool.inputSchema)
+        ? (tool.inputSchema as JsonSchema)
+        : { type: "object", properties: {}, additionalProperties: false },
   };
+
+  if (typeof tool.title === "string") normalized.title = tool.title;
+  if (typeof tool.description === "string") normalized.description = tool.description;
+  if (typeof tool.outputSchema === "object" && tool.outputSchema !== null && !Array.isArray(tool.outputSchema)) {
+    normalized.outputSchema = tool.outputSchema as JsonSchema;
+  }
+  if (typeof tool.annotations === "object" && tool.annotations !== null && !Array.isArray(tool.annotations)) {
+    normalized.annotations = tool.annotations as NonNullable<SimpliBackendTool["annotations"]>;
+  }
+  if (Array.isArray(tool.securitySchemes)) normalized.securitySchemes = tool.securitySchemes;
+
+  return normalized;
 }
 
 export class WordPressClient {
@@ -122,6 +125,12 @@ export class WordPressClient {
       expiresAt: new Date(expiresAt).toISOString(),
       stale: Date.now() >= expiresAt,
     };
+  }
+
+  // Compatibility for the existing server startup hook while the gateway migrates
+  // from the old Abilities vocabulary to the Simpli-owned tool vocabulary.
+  async getAbilitySnapshot(force = false): Promise<ToolSnapshot> {
+    return this.getToolSnapshot(force);
   }
 
   async listTools(force = false): Promise<SimpliBackendTool[]> {
@@ -152,7 +161,7 @@ export class WordPressClient {
         });
         return unique;
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         if (this.cache) {
           this.logger.warn("Simpli MCP backend refresh failed; using stale catalog", {
             error: error instanceof Error ? error.message : String(error),
