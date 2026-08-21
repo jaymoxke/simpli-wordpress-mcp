@@ -4,6 +4,9 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
+COPY tests ./tests
+RUN npm run check
+RUN npm test
 RUN npm run build
 
 FROM node:22-alpine AS runtime
