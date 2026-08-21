@@ -18,7 +18,7 @@ RUN apk add --no-cache chromium \
     && adduser -S app -G app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-COPY --from=build /app/dist/src ./dist
+COPY --from=build /app/dist ./dist
 USER app
 EXPOSE 3000
-CMD ["node", "dist/server.js"]
+CMD ["node", "dist/src/server.js"]
