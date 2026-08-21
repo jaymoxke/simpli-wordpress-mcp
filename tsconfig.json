@@ -14,5 +14,5 @@
     "sourceMap": true,
     "declaration": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
+  "include": ["railway-entry.ts", "src/**/*.ts", "tests/**/*.ts"]
 }
