@@ -9,7 +9,7 @@ RUN npm run check
 RUN npm test
 RUN npm run build
 RUN test -f dist/src/server.js \
-    && printf 'import "./src/server.js";\n' > dist/server.js \
+    && printf 'import { startServer } from "./src/server.js";\nstartServer().catch((error) => { console.error(JSON.stringify({ level: "error", message: "Startup failed", error: error instanceof Error ? error.message : String(error) })); process.exit(1); });\n' > dist/server.js \
     && node --check dist/server.js
 
 FROM node:22-alpine AS runtime
