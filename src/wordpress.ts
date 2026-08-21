@@ -65,6 +65,15 @@ export interface ToolSnapshot {
   stale: boolean;
 }
 
+export interface ReadinessResult {
+  ready: boolean;
+  toolCount: number;
+  backend: "simpli-mcp";
+  backendVersion?: string;
+  lastRefresh?: string;
+  error?: string;
+}
+
 export class WordPressRequestError extends Error {
   constructor(
     message: string,
@@ -105,6 +114,8 @@ function normalizeTool(value: unknown): SimpliBackendTool | null {
 export class WordPressClient {
   private cache?: { tools: SimpliBackendTool[]; refreshedAt: number };
   private refreshPromise: Promise<SimpliBackendTool[]> | undefined;
+  private readinessCache?: { result: ReadinessResult; checkedAt: number };
+  private readinessPromise: Promise<ReadinessResult> | undefined;
   private readonly endpoint: URL;
 
   constructor(
@@ -208,14 +219,30 @@ export class WordPressClient {
     return result;
   }
 
-  async readiness(): Promise<{
-    ready: boolean;
-    toolCount: number;
-    backend: "simpli-mcp";
-    backendVersion?: string;
-    lastRefresh?: string;
-    error?: string;
-  }> {
+  async readiness(): Promise<ReadinessResult> {
+    const now = Date.now();
+    const successTtlMs = Math.min(this.config.abilityCacheTtlMs, 60_000);
+    if (
+      this.readinessCache?.result.ready === true &&
+      now - this.readinessCache.checkedAt < successTtlMs
+    ) {
+      return this.readinessCache.result;
+    }
+    if (this.readinessPromise) return this.readinessPromise;
+
+    this.readinessPromise = this.checkReadiness()
+      .then((result) => {
+        if (result.ready) this.readinessCache = { result, checkedAt: Date.now() };
+        return result;
+      })
+      .finally(() => {
+        this.readinessPromise = undefined;
+      });
+
+    return this.readinessPromise;
+  }
+
+  private async checkReadiness(): Promise<ReadinessResult> {
     try {
       const [snapshot, statusResult] = await Promise.all([
         this.getToolSnapshot(),
