@@ -84,6 +84,54 @@ function toMcpTool(tool: SimpliBackendTool): Tool {
   };
 }
 
+function legacyWpToolToAbility(toolName: string): string | null {
+  if (!toolName.startsWith("wp__")) return null;
+  const encoded = toolName.slice(4);
+  const separator = encoded.indexOf("_");
+  if (separator <= 0 || separator === encoded.length - 1) return null;
+  return `${encoded.slice(0, separator)}/${encoded.slice(separator + 1)}`;
+}
+
+async function callCompatibilityTool(
+  wordpress: WordPressClient,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<{ output: Awaited<ReturnType<WordPressClient["callTool"]>>; routedTool: string } | null> {
+  if (toolName === "wordpress_discover_abilities" || toolName === "wordpress_refresh_ability_catalog") {
+    return { output: await wordpress.callTool("simpli_catalog", {}), routedTool: "simpli_catalog" };
+  }
+
+  if (toolName === "wordpress_get_ability") {
+    const name = args.name;
+    if (typeof name !== "string" || !name.trim()) {
+      throw new WordPressRequestError("Legacy wordpress_get_ability requires name", 400);
+    }
+    return {
+      output: await wordpress.callTool("simpli_describe", { ability_name: name }),
+      routedTool: "simpli_describe",
+    };
+  }
+
+  const abilityName = legacyWpToolToAbility(toolName);
+  if (!abilityName) return null;
+
+  const dispatcherInput: Record<string, unknown> = {
+    ability_name: abilityName,
+    input: args,
+  };
+  if (typeof args.authority_ref === "string" && args.authority_ref.trim()) {
+    dispatcherInput.authority_ref = args.authority_ref;
+  }
+  if (typeof args._confirm === "string") {
+    dispatcherInput._confirm = "RUN simpli_execute";
+  }
+
+  return {
+    output: await wordpress.callTool("simpli_execute", dispatcherInput),
+    routedTool: "simpli_execute",
+  };
+}
+
 export function createMcpServer(
   config: AppConfig,
   wordpress: WordPressClient,
@@ -109,17 +157,38 @@ export function createMcpServer(
     const toolName = request.params.name;
     try {
       const args = asArguments(request.params.arguments);
-      const tool = await wordpress.getTool(toolName);
-      requireScope(auth, requiredScope(tool));
+      let tool: SimpliBackendTool;
+      let output: Awaited<ReturnType<WordPressClient["callTool"]>>;
+      let routedToolName = toolName;
+
+      try {
+        tool = await wordpress.getTool(toolName);
+        requireScope(auth, requiredScope(tool));
+        output = await wordpress.callTool(toolName, args);
+      } catch (error) {
+        if (!(error instanceof WordPressRequestError) || error.status !== 404) throw error;
+        const compatibility = await callCompatibilityTool(wordpress, toolName, args);
+        if (!compatibility) throw error;
+        routedToolName = compatibility.routedTool;
+        tool = await wordpress.getTool(routedToolName);
+        requireScope(auth, requiredScope(tool));
+        output = compatibility.output;
+        logger.info("Legacy MCP tool routed through Simpli compatibility dispatcher", {
+          legacyToolName: toolName,
+          routedToolName,
+          authMode: auth.mode,
+          clientId: auth.clientId.slice(0, 24),
+        });
+      }
 
       logger.info("Simpli backend tool invoked", {
         toolName,
+        routedToolName,
         scope: requiredScope(tool),
         authMode: auth.mode,
         clientId: auth.clientId.slice(0, 24),
       });
 
-      const output = await wordpress.callTool(toolName, args);
       const structured = output.structuredContent ?? { content: output.content ?? null };
       const result = textResult(structured, config.maxToolOutputBytes, `Simpli tool ${toolName} completed.`);
       return { ...result, isError: false };
