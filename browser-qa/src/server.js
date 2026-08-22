@@ -13,6 +13,7 @@ const allowedHosts = new Set(
     .map((v) => v.trim().toLowerCase())
     .filter(Boolean)
 );
+const restrictedPathPrefixes = ['/checkout', '/my-account', '/wp-admin', '/wp-login.php'];
 
 function requireAuth(req, res, next) {
   if (!API_TOKEN) return res.status(503).json({ error: 'SERVICE_NOT_CONFIGURED' });
@@ -21,17 +22,25 @@ function requireAuth(req, res, next) {
   next();
 }
 
-function validateTarget(raw) {
+function assertAllowedPageUrl(raw, errorPrefix = 'TARGET') {
   let parsed;
   try {
     parsed = new URL(String(raw || ''));
   } catch {
-    throw new Error('INVALID_URL');
+    throw new Error(`${errorPrefix}_INVALID_URL`);
   }
-  if (parsed.protocol !== 'https:') throw new Error('HTTPS_REQUIRED');
-  if (!allowedHosts.has(parsed.hostname.toLowerCase())) throw new Error('HOST_NOT_ALLOWED');
-  if (parsed.username || parsed.password) throw new Error('URL_CREDENTIALS_NOT_ALLOWED');
-  return parsed.toString();
+  if (parsed.protocol !== 'https:') throw new Error(`${errorPrefix}_HTTPS_REQUIRED`);
+  if (!allowedHosts.has(parsed.hostname.toLowerCase())) throw new Error(`${errorPrefix}_HOST_NOT_ALLOWED`);
+  if (parsed.username || parsed.password) throw new Error(`${errorPrefix}_URL_CREDENTIALS_NOT_ALLOWED`);
+  const path = parsed.pathname.toLowerCase();
+  if (restrictedPathPrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) {
+    throw new Error(`${errorPrefix}_RESTRICTED_PATH`);
+  }
+  return parsed;
+}
+
+function validateTarget(raw) {
+  return assertAllowedPageUrl(raw).toString();
 }
 
 function viewportFor(name) {
@@ -63,8 +72,7 @@ async function runActions(page, actions = []) {
     } else {
       throw new Error('ACTION_NOT_ALLOWED');
     }
-    const current = new URL(page.url());
-    if (!allowedHosts.has(current.hostname.toLowerCase())) throw new Error('NAVIGATION_ESCAPED_ALLOWED_HOST');
+    assertAllowedPageUrl(page.url(), 'NAVIGATION');
     results.push({ type, selector, ok: true, url: page.url() });
   }
   return results;
@@ -93,8 +101,7 @@ async function withPage(body, callback) {
   try {
     const response = await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
-    const current = new URL(page.url());
-    if (!allowedHosts.has(current.hostname.toLowerCase())) throw new Error('NAVIGATION_ESCAPED_ALLOWED_HOST');
+    assertAllowedPageUrl(page.url(), 'NAVIGATION');
     return await callback({ page, context, response, viewport, consoleErrors, pageErrors, failedRequests });
   } finally {
     await context.close().catch(() => {});
@@ -111,9 +118,10 @@ app.get('/health', async (_req, res) => {
   } catch {}
   res.status(browserReady ? 200 : 503).json({
     service: 'simpli-browser-qa',
-    version: '0.1.0',
+    version: '0.2.0',
     browserReady,
-    targetPolicy: 'SIMPLI_HTTPS_ONLY'
+    targetPolicy: 'SIMPLI_HTTPS_PUBLIC_STOREFRONT_ONLY',
+    restrictedPaths: restrictedPathPrefixes
   });
 });
 

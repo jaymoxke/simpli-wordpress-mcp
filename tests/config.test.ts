@@ -28,4 +28,21 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...base, PUBLIC_BASE_URL: "http://mcp.example.test", MCP_STATIC_TOKEN: "s".repeat(48) }))
       .toThrow(/must use HTTPS/);
   });
+
+  it("requires Browser QA URL and token together", () => {
+    expect(() => loadConfig({
+      ...base,
+      MCP_STATIC_TOKEN: "s".repeat(48),
+      BROWSER_QA_BASE_URL: "https://browser.example.test",
+    })).toThrow(/must be configured together/);
+
+    const config = loadConfig({
+      ...base,
+      MCP_STATIC_TOKEN: "s".repeat(48),
+      BROWSER_QA_BASE_URL: "https://browser.example.test/",
+      BROWSER_QA_TOKEN: "b".repeat(48),
+    });
+    expect(config.browserQaBaseUrl).toBe("https://browser.example.test");
+    expect(config.browserQaToken).toBe("b".repeat(48));
+  });
 });
