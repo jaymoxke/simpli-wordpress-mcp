@@ -12,6 +12,7 @@ export const testConfig: AppConfig = {
   oauthSigningSecret: "o".repeat(64),
   oauthAdminPassword: "correct horse battery staple",
   staticToken: "s".repeat(48),
+  browserQaTimeoutMs: 65_000,
   abilityCacheTtlMs: 300_000,
   wordpressTimeoutMs: 10_000,
   maxToolOutputBytes: 262_144,
