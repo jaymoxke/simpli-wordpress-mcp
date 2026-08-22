@@ -218,7 +218,7 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
     if (!res.headersSent) res.status(500).json({ error: "internal_server_error" });
   });
 
-  return { app, sessions, oauth };
+  return { app, sessions };
 }
 
 export async function startServer(config = loadConfig()): Promise<HttpServer> {
@@ -236,10 +236,10 @@ export async function startServer(config = loadConfig()): Promise<HttpServer> {
 
   void wordpress.readiness().then((readiness) => {
     if (readiness.ready) {
-      logger.info("Simpli MCP backend readiness verified", readiness);
+      logger.info("Simpli MCP backend readiness verified", { ...readiness });
       return;
     }
-    logger.warn("Simpli MCP backend readiness failed", readiness);
+    logger.warn("Simpli MCP backend readiness failed", { ...readiness });
   }).catch((error) => {
     logger.warn("Initial Simpli MCP readiness probe failed", {
       error: error instanceof Error ? error.message : String(error),
@@ -248,22 +248,23 @@ export async function startServer(config = loadConfig()): Promise<HttpServer> {
 
   const shutdown = async (signal: string) => {
     logger.info("Shutdown requested", { signal, sessions: sessions.size });
-    for (const entry of sessions.values()) {
-      await entry.transport.close().catch(() => undefined);
-      await entry.server.close().catch(() => undefined);
+    for (const [sessionId, entry] of sessions) {
+      try {
+        await entry.server.close();
+      } catch (error) {
+        logger.warn("MCP server close failed", { sessionId, error: error instanceof Error ? error.message : String(error) });
+      }
+      try {
+        await entry.transport.close();
+      } catch (error) {
+        logger.warn("MCP transport close failed", { sessionId, error: error instanceof Error ? error.message : String(error) });
+      }
     }
-    sessions.clear();
     httpServer.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 10_000).unref();
   };
+
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
   process.once("SIGINT", () => void shutdown("SIGINT"));
   return httpServer;
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  startServer().catch((error) => {
-    console.error(JSON.stringify({ level: "error", message: "Startup failed", error: error instanceof Error ? error.message : String(error) }));
-    process.exit(1);
-  });
 }
