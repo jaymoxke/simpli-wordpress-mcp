@@ -80,38 +80,54 @@ export function makeWordPressFetch(tools: SimpliBackendTool[] = fakeTools): {
   calls: FetchCall[];
 } {
   const calls: FetchCall[] = [];
-  const fetchImpl: typeof fetch = async (input, init) => {
-    const url = input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+  const fakeFetch = async (input: URL | RequestInfo, init?: RequestInit): Promise<Response> => {
+    const url = new URL(input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url);
     const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
     calls.push({ url, ...(init ? { init } : {}), ...(body ? { body } : {}) });
 
-    const method = body?.method;
-    if (method === "tools/list") {
-      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body?.id ?? "1", result: { tools } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
+    if (url.pathname !== "/wp-json/simpli-mcp/v1/mcp" || init?.method !== "POST" || !body) {
+      return new Response(JSON.stringify({ code: "not_found", message: "Not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
       });
     }
-    if (method === "tools/call") {
-      const params = body?.params as Record<string, unknown> | undefined;
-      const name = params?.name;
-      let structuredContent: Record<string, unknown> = { ok: true, tool: name };
-      if (name === "simpli_self_status") {
-        structuredContent = { version: "test", status: "ok" };
+
+    const id = body.id ?? null;
+    if (body.method === "tools/list") {
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id, result: { tools } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (body.method === "tools/call") {
+      const params = body.params as { name?: string; arguments?: Record<string, unknown> } | undefined;
+      if (params?.name === "simpli_self_status") {
+        return new Response(JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            structuredContent: { state: "STATE_VERIFIED", version: "0.2.0" },
+            content: [{ type: "text", text: "status" }],
+            isError: false,
+          },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       return new Response(JSON.stringify({
         jsonrpc: "2.0",
-        id: body?.id ?? "1",
-        result: { structuredContent, isError: false },
-      }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+        id,
+        result: {
+          structuredContent: { ok: true, tool: params?.name, arguments: params?.arguments ?? {} },
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        },
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
-    return new Response(JSON.stringify({ jsonrpc: "2.0", id: body?.id ?? "1", error: { code: -32601, message: "not found" } }), {
+
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } }), {
       status: 200,
-      headers: { "content-type": "application/json" },
+      headers: { "Content-Type": "application/json" },
     });
   };
-  return { fetch: fetchImpl, calls };
+  return { fetch: fakeFetch as typeof fetch, calls };
 }
