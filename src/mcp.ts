@@ -9,6 +9,7 @@ import type { AppConfig } from "./config.js";
 import type { AuthContext } from "./oauth.js";
 import { requireScope } from "./oauth.js";
 import type { Logger } from "./logger.js";
+import { BrowserQaClient } from "./browser-qa.js";
 import {
   WordPressClient,
   WordPressRequestError,
@@ -16,6 +17,8 @@ import {
 } from "./wordpress.js";
 
 type GatewayScope = "wordpress:read" | "wordpress:write" | "wordpress:dangerous";
+
+type BackendOutput = Awaited<ReturnType<WordPressClient["callTool"]>>;
 
 const LEGACY_ABILITY_ALIASES: Record<string, { abilityName: string; scope: GatewayScope }> = {
   "core/get-site-info": { abilityName: "wordpress/site-info.get", scope: "wordpress:read" },
@@ -118,6 +121,28 @@ function mapLegacyAbilityInput(abilityName: string, args: Record<string, unknown
   return args;
 }
 
+function mergeBrowserCatalog(output: BackendOutput, browserQa: BrowserQaClient): BackendOutput {
+  const structured = output.structuredContent;
+  if (typeof structured !== "object" || structured === null || Array.isArray(structured)) return output;
+  const payload = structured as Record<string, unknown>;
+  const existing = Array.isArray(payload.abilities) ? payload.abilities : [];
+  const browserAbilities = browserQa.catalog().map((ability) => ({
+    name: ability.name,
+    description: ability.description,
+    readonly: ability.readonly,
+    risk: ability.risk,
+    authority_class: ability.authority_class,
+    requires_confirmation: ability.requires_confirmation,
+  }));
+  return {
+    ...output,
+    structuredContent: {
+      ...payload,
+      abilities: [...existing, ...browserAbilities],
+    },
+  };
+}
+
 async function callCompatibilityTool(
   wordpress: WordPressClient,
   toolName: string,
@@ -187,12 +212,13 @@ export function createMcpServer(
   auth: AuthContext,
   logger: Logger,
 ): Server {
+  const browserQa = new BrowserQaClient(config, logger);
   const server = new Server(
-    { name: "simpli-mcp", version: "2.0.0" },
+    { name: "simpli-mcp", version: "2.1.0" },
     {
       capabilities: { tools: { listChanged: true } },
       instructions:
-        "Simpli Cosmetics Kenya first-party MCP. Tools are supplied only by the Simpli-owned WordPress MCP backend. Read current state before writes. Tool access does not grant business authority. Mutations must satisfy each tool's own authority_ref, confirmation, before-state and rollback controls. Never infer successful production acceptance from a transport-level success response.",
+        "Simpli Cosmetics Kenya first-party MCP. Governed abilities may be supplied by the Simpli-owned WordPress backend and the isolated Simpli Browser QA service. Read current state before writes. Tool access does not grant business authority. Browser QA is restricted to Simpli HTTPS targets; interactive browser actions require bounded authority and confirmation. Mutations must satisfy each tool's own authority_ref, confirmation, before-state and rollback controls. Never infer successful production acceptance from a transport-level success response.",
     },
   );
 
@@ -206,30 +232,89 @@ export function createMcpServer(
     const toolName = request.params.name;
     try {
       const args = asArguments(request.params.arguments);
-      let output: Awaited<ReturnType<WordPressClient["callTool"]>>;
+      let output: BackendOutput;
       let routedToolName = toolName;
       let scope: GatewayScope;
 
-      try {
-        const tool = await wordpress.getTool(toolName);
-        scope = requiredScope(tool);
+      if (toolName === "simpli_catalog" && browserQa.configured) {
+        scope = "wordpress:read";
         requireScope(auth, scope);
-        output = await wordpress.callTool(toolName, args);
-      } catch (error) {
-        if (!(error instanceof WordPressRequestError) || error.status !== 404) throw error;
-        const compatibility = await callCompatibilityTool(wordpress, toolName, args);
-        if (!compatibility) throw error;
-        routedToolName = compatibility.routedTool;
-        scope = compatibility.scope;
+        output = mergeBrowserCatalog(await wordpress.callTool("simpli_catalog", {}), browserQa);
+        routedToolName = "simpli_catalog+browser-qa";
+      } else if (
+        toolName === "simpli_describe" &&
+        browserQa.hasAbility(args.ability_name)
+      ) {
+        const ability = browserQa.describe(args.ability_name);
+        scope = ability.gateway_scope;
         requireScope(auth, scope);
-        output = compatibility.output;
-        logger.info("Legacy MCP tool routed through Simpli compatibility dispatcher", {
-          legacyToolName: toolName,
+        output = {
+          structuredContent: {
+            name: ability.name,
+            description: ability.description,
+            readonly: ability.readonly,
+            risk: ability.risk,
+            authority_class: ability.authority_class,
+            requires_confirmation: ability.requires_confirmation,
+            input_schema: ability.input_schema,
+            output_schema: ability.output_schema,
+          },
+        };
+        routedToolName = "browser-qa/describe";
+      } else if (
+        toolName === "simpli_execute" &&
+        browserQa.hasAbility(args.ability_name)
+      ) {
+        const ability = browserQa.describe(args.ability_name);
+        scope = ability.gateway_scope;
+        requireScope(auth, scope);
+        const localInput = asArguments(args.input);
+        const execution = await browserQa.execute(
+          ability.name,
+          localInput,
+          args.authority_ref,
+          args._confirm,
+        );
+        routedToolName = `browser-qa/${ability.name}`;
+
+        logger.info("Simpli Browser QA ability invoked through dispatcher", {
+          toolName,
           routedToolName,
-          ...(compatibility.abilityName ? { abilityName: compatibility.abilityName } : {}),
+          scope,
           authMode: auth.mode,
           clientId: auth.clientId.slice(0, 24),
         });
+
+        if (execution.kind === "image") {
+          return {
+            content: [{ type: "image", data: execution.dataBase64, mimeType: execution.mimeType }],
+            structuredContent: execution.metadata,
+            isError: false,
+          };
+        }
+        output = { structuredContent: execution.value };
+      } else {
+        try {
+          const tool = await wordpress.getTool(toolName);
+          scope = requiredScope(tool);
+          requireScope(auth, scope);
+          output = await wordpress.callTool(toolName, args);
+        } catch (error) {
+          if (!(error instanceof WordPressRequestError) || error.status !== 404) throw error;
+          const compatibility = await callCompatibilityTool(wordpress, toolName, args);
+          if (!compatibility) throw error;
+          routedToolName = compatibility.routedTool;
+          scope = compatibility.scope;
+          requireScope(auth, scope);
+          output = compatibility.output;
+          logger.info("Legacy MCP tool routed through Simpli compatibility dispatcher", {
+            legacyToolName: toolName,
+            routedToolName,
+            ...(compatibility.abilityName ? { abilityName: compatibility.abilityName } : {}),
+            authMode: auth.mode,
+            clientId: auth.clientId.slice(0, 24),
+          });
+        }
       }
 
       logger.info("Simpli backend tool invoked", {
