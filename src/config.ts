@@ -9,6 +9,9 @@ const EnvSchema = z.object({
   OAUTH_SIGNING_SECRET: z.string().min(32).optional(),
   OAUTH_ADMIN_PASSWORD: z.string().min(16).optional(),
   MCP_STATIC_TOKEN: z.string().min(32).optional(),
+  BROWSER_QA_BASE_URL: z.string().url().optional(),
+  BROWSER_QA_TOKEN: z.string().min(32).optional(),
+  BROWSER_QA_TIMEOUT_MS: z.coerce.number().int().min(5000).max(120000).default(65000),
   ABILITY_CACHE_TTL_SECONDS: z.coerce.number().int().min(30).max(3600).default(300),
   WORDPRESS_TIMEOUT_MS: z.coerce.number().int().min(5000).max(180000).default(65000),
   MAX_TOOL_OUTPUT_BYTES: z.coerce.number().int().min(16384).max(1048576).default(262144),
@@ -43,6 +46,9 @@ export interface AppConfig {
   oauthSigningSecret?: string;
   oauthAdminPassword?: string;
   staticToken?: string;
+  browserQaBaseUrl?: string;
+  browserQaToken?: string;
+  browserQaTimeoutMs: number;
   abilityCacheTtlMs: number;
   wordpressTimeoutMs: number;
   maxToolOutputBytes: number;
@@ -57,6 +63,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     OAUTH_SIGNING_SECRET: environment.OAUTH_SIGNING_SECRET || undefined,
     OAUTH_ADMIN_PASSWORD: environment.OAUTH_ADMIN_PASSWORD || undefined,
     MCP_STATIC_TOKEN: environment.MCP_STATIC_TOKEN || undefined,
+    BROWSER_QA_BASE_URL: environment.BROWSER_QA_BASE_URL || undefined,
+    BROWSER_QA_TOKEN: environment.BROWSER_QA_TOKEN || undefined,
   });
 
   if (!(parsed.OAUTH_SIGNING_SECRET && parsed.OAUTH_ADMIN_PASSWORD) && !parsed.MCP_STATIC_TOKEN) {
@@ -65,8 +73,15 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     );
   }
 
+  if (Boolean(parsed.BROWSER_QA_BASE_URL) !== Boolean(parsed.BROWSER_QA_TOKEN)) {
+    throw new Error("BROWSER_QA_BASE_URL and BROWSER_QA_TOKEN must be configured together.");
+  }
+
   assertSecureUrl(parsed.PUBLIC_BASE_URL, "PUBLIC_BASE_URL", true);
   assertSecureUrl(parsed.WORDPRESS_URL, "WORDPRESS_URL", false);
+  if (parsed.BROWSER_QA_BASE_URL) {
+    assertSecureUrl(parsed.BROWSER_QA_BASE_URL, "BROWSER_QA_BASE_URL", true);
+  }
 
   const publicBaseUrl = withoutTrailingSlash(parsed.PUBLIC_BASE_URL);
   return {
@@ -79,6 +94,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     ...(parsed.OAUTH_SIGNING_SECRET ? { oauthSigningSecret: parsed.OAUTH_SIGNING_SECRET } : {}),
     ...(parsed.OAUTH_ADMIN_PASSWORD ? { oauthAdminPassword: parsed.OAUTH_ADMIN_PASSWORD } : {}),
     ...(parsed.MCP_STATIC_TOKEN ? { staticToken: parsed.MCP_STATIC_TOKEN } : {}),
+    ...(parsed.BROWSER_QA_BASE_URL
+      ? { browserQaBaseUrl: withoutTrailingSlash(parsed.BROWSER_QA_BASE_URL) }
+      : {}),
+    ...(parsed.BROWSER_QA_TOKEN ? { browserQaToken: parsed.BROWSER_QA_TOKEN } : {}),
+    browserQaTimeoutMs: parsed.BROWSER_QA_TIMEOUT_MS,
     abilityCacheTtlMs: parsed.ABILITY_CACHE_TTL_SECONDS * 1000,
     wordpressTimeoutMs: parsed.WORDPRESS_TIMEOUT_MS,
     maxToolOutputBytes: parsed.MAX_TOOL_OUTPUT_BYTES,
@@ -97,6 +117,9 @@ export function redactConfig(config: AppConfig): Record<string, unknown> {
     wordpressUsername: config.wordpressUsername,
     oauthEnabled: Boolean(config.oauthSigningSecret && config.oauthAdminPassword),
     staticTokenEnabled: Boolean(config.staticToken),
+    browserQaEnabled: Boolean(config.browserQaBaseUrl && config.browserQaToken),
+    ...(config.browserQaBaseUrl ? { browserQaBaseUrl: config.browserQaBaseUrl } : {}),
+    browserQaTimeoutMs: config.browserQaTimeoutMs,
     abilityCacheTtlMs: config.abilityCacheTtlMs,
     wordpressTimeoutMs: config.wordpressTimeoutMs,
     maxToolOutputBytes: config.maxToolOutputBytes,
