@@ -30,7 +30,7 @@ describe("BrowserQaClient", () => {
   });
 
   it("executes passive inspect with bearer auth and no actions", async () => {
-    const fetchMock = vi.fn(async (_url: URL | RequestInfo, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
       expect(init?.headers).toMatchObject({ Authorization: `Bearer ${"b".repeat(48)}` });
       expect(JSON.parse(String(init?.body))).toMatchObject({
         url: "https://www.simplicosmetics.co.ke/product/example/",
