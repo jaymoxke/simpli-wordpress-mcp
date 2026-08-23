@@ -65,13 +65,15 @@ async function processInbound(event) {
   const current = await db.getConversation(conv.id);
   if (risk.blocking) {
     await db.escalate(conv.id, 'PRE_SEND_RISK_GATE', risk.flags);
-    await db.updateConversation(conv.id, { owner: 'HUMAN', state: 'ESCALATED', risk_flags: risk.flags, control_state: 'QA_BLOCK' });
-    const decision = shouldAutoSend({ mode: modeValue, owner: 'AI', riskBlocking: false, hoursResult });
+    await db.updateConversation(conv.id, { owner: 'HUMAN', state: 'ESCALATED', risk_flags: risk.flags, control_state: risk.controlState || 'QA_BLOCK' });
+    const decision = shouldAutoSend({ mode: modeValue, owner: current.owner, riskBlocking: false, hoursResult });
     if (decision.send && env.YCLOUD_API_KEY && env.YCLOUD_FROM) {
       const reply = safeEscalationReply(risk.flags); const out = await sendText({ apiKey: env.YCLOUD_API_KEY, from: env.YCLOUD_FROM, to: msg.from, recipient: msg.fromUserId || msg.fromParentUserId, text: reply });
       await db.addMessage({ conversationId: conv.id, providerMessageId: out?.wamid || out?.id || `local-${crypto.randomUUID()}`, direction: 'OUTBOUND', type: 'text', body: reply, status: 'sent' });
     }
-    await db.audit(conv.id, 'RISK_ESCALATED', 'SYSTEM', { flags: risk.flags }); return;
+    await db.audit(conv.id, 'RISK_ESCALATED', 'SYSTEM', { flags: risk.flags, control_state: risk.controlState || 'QA_BLOCK', safe_ack_decision: decision.reason });
+    console.log(JSON.stringify({ event: 'RISK_ESCALATED', flags: risk.flags, control_state: risk.controlState || 'QA_BLOCK', safe_ack_decision: decision.reason }));
+    return;
   }
   const sendDecision = shouldAutoSend({ mode: modeValue, owner: current.owner, riskBlocking: false, hoursResult });
   const recent = await db.recentMessages(conv.id, 10);
@@ -102,11 +104,13 @@ async function processInbound(event) {
         sendDecision: modelRisk ? 'MODEL_HANDOFF' : sendDecision.reason,
         responseText: p.response_text,
       });
-      await db.audit(conv.id, 'SHADOW_DRAFT_CAPTURED', 'AI', { draft_id: draftId, intent: p.primary_intent || null, qa_pass: qa.pass, tool_calls: toolCalls });
+      await db.audit(conv.id, 'SHADOW_DRAFT_CAPTURED', 'AI', { draft_id: draftId, configuration_id: advisor.configurationId || null, intent: p.primary_intent || null, specialist_route: p.specialist_route || null, evidence_state: p.evidence_state || null, customer_decision: p.customer_decision || null, grounding_kind: advisor.grounding?.kind || 'NONE', qa_pass: qa.pass, tool_calls: toolCalls });
       console.log(JSON.stringify({
-        event: 'SHADOW_DRAFT_CAPTURED', draft_id: draftId, model: env.OPENAI_MODEL || 'gpt-5.6',
-        primary_intent: p.primary_intent || null, advisor_action: p.advisor_action || null,
+        event: 'SHADOW_DRAFT_CAPTURED', draft_id: draftId, configuration_id: advisor.configurationId || null, model: env.OPENAI_MODEL || 'gpt-5.6',
+        grounding_kind: advisor.grounding?.kind || 'NONE', primary_intent: p.primary_intent || null, advisor_action: p.advisor_action || null,
+        specialist_route: p.specialist_route || null, evidence_state: p.evidence_state || null, customer_decision: p.customer_decision || null,
         control_state: p.control_state || 'NONE', risk_flags: p.risk_flags || [], handoff_required: !!p.handoff_required,
+        questions_needed_count: Array.isArray(p.questions_needed) ? p.questions_needed.length : 0,
         tool_calls: toolCalls, qa_pass: qa.pass, qa_reasons: qa.reasons || [],
         send_decision: modelRisk ? 'MODEL_HANDOFF' : sendDecision.reason,
         encrypted_draft: true, encrypted_answer_basis: true,
@@ -180,9 +184,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/admin/api/conversations') return json(res, 200, { items: await db.listConversations(Number(url.searchParams.get('limit') || 100)) }, adminHeaders);
     if (req.method === 'GET' && url.pathname === '/admin/api/shadow-drafts') return json(res, 200, { items: await db.listShadowDrafts(Number(url.searchParams.get('limit') || 50)) }, adminHeaders);
     if (req.method === 'POST' && url.pathname === '/admin/api/mode') { const b = JSON.parse(await readBody(req, 16384)); if (!['SHADOW', 'AFTER_HOURS', 'AI_ALWAYS', 'HUMAN_ONLY'].includes(b.mode)) return json(res, 400, { error: 'invalid_mode' }, adminHeaders); await db.setSetting('mode', { value: b.mode }); await db.audit(null, 'MODE_CHANGED', 'HUMAN', { mode: b.mode }); return json(res, 200, { ok: true, mode: b.mode }, adminHeaders); }
-    if (req.method === 'POST' && url.pathname === '/admin/api/hours') { const b = JSON.parse(await readBody(req, 65536)); if (!b || b.configured !== true || !b.week) return json(res, 400, { error: 'invalid_hours' }, adminHeaders); b.timezone = b.timezone || 'Africa/Nairobi'; await db.setSetting('business_hours', b); await db.audit(null, 'HOURS_CHANGED', 'HUMAN', { timezone: b.timezone }); return json(res, 200, { ok: true }, adminHeaders); }
+    if (req.method === 'POST' && url.pathname === '/admin/api/hours') { const b = JSON.parse(await readBody(req, 65536)); if (!b || b.configured !== true || !b.week) return json(res, 400, { error: 'invalid_hours' }); b.timezone = b.timezone || 'Africa/Nairobi'; await db.setSetting('business_hours', b); await db.audit(null, 'HOURS_CHANGED', 'HUMAN', { timezone: b.timezone }); return json(res, 200, { ok: true }); }
     const m = url.pathname.match(/^\/admin\/api\/conversations\/([0-9a-f-]+)\/(takeover|release)$/i);
-    if (req.method === 'POST' && m) { const id = m[1], action = m[2]; const c = await db.getConversation(id); if (!c) return json(res, 404, { error: 'not_found' }, adminHeaders); if (action === 'takeover') { await db.updateConversation(id, { owner: 'HUMAN', state: 'OPEN' }); await db.audit(id, 'HUMAN_TAKEOVER', 'HUMAN', {}); } else { await db.updateConversation(id, { owner: 'AI', state: 'OPEN', control_state: 'NONE' }); await db.resolveEscalations(id); await db.audit(id, 'RETURN_TO_AI', 'HUMAN', {}); } return json(res, 200, { ok: true }, adminHeaders); }
+    if (req.method === 'POST' && m) { const id = m[1], action = m[2]; const c = await db.getConversation(id); if (!c) return json(res, 404, { error: 'not_found' }, adminHeaders); if (action === 'takeover') { await db.updateConversation(id, { owner: 'HUMAN', state: 'OPEN' }); await db.audit(id, 'HUMAN_TAKEOVER', 'HUMAN', {}); } else { await db.updateConversation(id, { owner: 'AI', state: 'OPEN', control_state: 'NONE' }); await db.resolveEscalations(id); await db.audit(id, 'RETURN_TO_AI', 'HUMAN', {}); } return json(res, 200, { ok: true }); }
     return json(res, 404, { error: 'not_found' });
   } catch (e) { return json(res, e.message === 'BODY_TOO_LARGE' ? 413 : 500, { error: 'request_failed', message: String(e.message).slice(0, 300) }); }
 });
