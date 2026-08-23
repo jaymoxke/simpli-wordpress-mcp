@@ -104,9 +104,15 @@ export function normalizeMcpOutput(value){
   return null;
 }
 function completedMcpCalls(data){
-  return (data.output||[]).filter(x=>x?.type==='mcp_call').map(x=>({name:x.name,server_label:x.server_label,status:x.status,error:x.error||null,output:normalizeMcpOutput(x.output),raw_output_type:typeof x.output,labeled_output:typeof x.output==='string'&&x.output.trim().startsWith(MCP_COMPLETION_PREFIX),truncated_output:typeof x.output==='string'&&x.output.includes('[Output truncated:')}));
+  return (data.output||[]).filter(x=>x?.type==='mcp_call').map(x=>({
+    name:x.name,server_label:x.server_label,status:x.status,error:x.error||null,output:normalizeMcpOutput(x.output),
+    raw_output_type:typeof x.output,
+    labeled_output:typeof x.output==='string'&&x.output.trim().startsWith(MCP_COMPLETION_PREFIX),
+    truncated_output:typeof x.output==='string'&&x.output.includes('[Output truncated:')
+  }));
 }
 function successfulFacadeCalls(toolCalls){return toolCalls.filter(x=>x.name===WHATSAPP_READ_FACADE&&x.server_label==='simpli'&&!x.error&&(!x.status||x.status==='completed'));}
+function failedFacadeCalls(toolCalls){return toolCalls.filter(x=>x.name===WHATSAPP_READ_FACADE&&x.server_label==='simpli'&&(!!x.error||(x.status&&x.status!=='completed')));}
 function admittedProductIntelligence(value){return value?.state==='STATE_VERIFIED'&&value?.admission?.all_passed===true;}
 function admittedProductGetCount(calls){return calls.filter(x=>x.output?.operation==='PRODUCT_GET'&&admittedProductIntelligence(x.output?.product_intelligence)).length;}
 function goldenListHasAdmitted(calls){return calls.some(x=>x.output?.operation==='GOLDEN_LIST'&&Array.isArray(x.output?.items)&&x.output.items.some(item=>admittedProductIntelligence(item?.product_intelligence)));}
@@ -129,7 +135,10 @@ export function deriveEvidenceState({requirement,toolCalls,packet}){
 export function validateGrounding({requirement,toolCalls,packet}){
   if(!requirement?.required)return true;
   const calls=successfulFacadeCalls(toolCalls);
-  if(calls.length===0)throw new Error('GROUNDED_TOOL_REQUIRED_BUT_NOT_USED');
+  if(calls.length===0){
+    if(failedFacadeCalls(toolCalls).length>0)throw new Error('GROUNDED_TOOL_FAILED');
+    throw new Error('GROUNDED_TOOL_REQUIRED_BUT_NOT_USED');
+  }
   if(calls.some(call=>call.truncated_output))throw new Error('GROUNDED_TOOL_OUTPUT_TRUNCATED');
   const abstaining=safeAbstention(packet);
   const evidenceState=deriveEvidenceState({requirement,toolCalls,packet});
@@ -163,14 +172,15 @@ export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,message
   const data=JSON.parse(raw),approval=data.output?.find(x=>x.type==='mcp_approval_request');
   if(approval)return{blocked:true,blockReason:'UNEXPECTED_MCP_APPROVAL_REQUEST',responseId:data.id,packet:null,toolCalls:[]};
   const toolCalls=completedMcpCalls(data);
-  console.log(JSON.stringify({event:'MCP_GROUNDING_TRACE',configuration_id:AI_CONFIGURATION_ID,calls:toolCalls.map(call=>({name:call.name,status:call.status||null,error:!!call.error,raw_output_type:call.raw_output_type,labeled_output:call.labeled_output,truncated_output:call.truncated_output,operation:call.output?.operation||null,state:call.output?.state||null,product_intelligence_state:call.output?.product_intelligence?.state||null,admission_all_passed:call.output?.product_intelligence?.admission?.all_passed===true,golden_items_admitted:Array.isArray(call.output?.items)?call.output.items.filter(item=>admittedProductIntelligence(item?.product_intelligence)).length:null}))}));
-  for(const call of toolCalls){if(call.name===WHATSAPP_READ_FACADE&&call.error)throw new Error('GROUNDED_TOOL_FAILED');if(call.name===WHATSAPP_READ_FACADE&&call.status&&call.status!=='completed')throw new Error(`GROUNDED_TOOL_FAILED:${call.status}`);}
+  const failedCalls=failedFacadeCalls(toolCalls);
+  const successfulCalls=successfulFacadeCalls(toolCalls);
+  console.log(JSON.stringify({event:'MCP_GROUNDING_TRACE',configuration_id:AI_CONFIGURATION_ID,failed_call_count:failedCalls.length,successful_call_count:successfulCalls.length,recovered_after_failed_call:failedCalls.length>0&&successfulCalls.length>0,calls:toolCalls.map(call=>({name:call.name,status:call.status||null,error:!!call.error,raw_output_type:call.raw_output_type,labeled_output:call.labeled_output,truncated_output:call.truncated_output,operation:call.output?.operation||null,state:call.output?.state||null,product_intelligence_state:call.output?.product_intelligence?.state||null,admission_all_passed:call.output?.product_intelligence?.admission?.all_passed===true,golden_items_admitted:Array.isArray(call.output?.items)?call.output.items.filter(item=>admittedProductIntelligence(item?.product_intelligence)).length:null}))}));
   const text=data.output_text||data.output?.flatMap(x=>x.content||[]).find(c=>c.type==='output_text')?.text;
   if(!text)throw new Error('OpenAI returned no output text');
   const modelPacket=JSON.parse(text);
   const modelEvidenceState=modelPacket.evidence_state;
   const packet={...modelPacket,evidence_state:deriveEvidenceState({requirement,toolCalls,packet:modelPacket})};
   validateGrounding({requirement,toolCalls,packet});
-  console.log(JSON.stringify({event:'OPENAI_ADVISOR_RESULT',configuration_id:AI_CONFIGURATION_ID,grounding_kind:requirement.kind,grounding_required:requirement.required,tool_calls:toolCalls.map(x=>x.name),operations:toolCalls.map(x=>x.output?.operation).filter(Boolean),primary_intent:packet.primary_intent,advisor_action:packet.advisor_action,specialist_route:packet.specialist_route,model_evidence_state:modelEvidenceState,evidence_state:packet.evidence_state,evidence_state_adjusted:modelEvidenceState!==packet.evidence_state,customer_decision:packet.customer_decision,handoff_required:packet.handoff_required}));
+  console.log(JSON.stringify({event:'OPENAI_ADVISOR_RESULT',configuration_id:AI_CONFIGURATION_ID,grounding_kind:requirement.kind,grounding_required:requirement.required,tool_calls:toolCalls.map(x=>x.name),operations:toolCalls.map(x=>x.output?.operation).filter(Boolean),failed_tool_calls:failedCalls.length,recovered_after_failed_call:failedCalls.length>0&&successfulCalls.length>0,primary_intent:packet.primary_intent,advisor_action:packet.advisor_action,specialist_route:packet.specialist_route,model_evidence_state:modelEvidenceState,evidence_state:packet.evidence_state,evidence_state_adjusted:modelEvidenceState!==packet.evidence_state,customer_decision:packet.customer_decision,handoff_required:packet.handoff_required}));
   return{blocked:false,responseId:data.id,packet,toolCalls,configurationId:AI_CONFIGURATION_ID,grounding:requirement};
 }
