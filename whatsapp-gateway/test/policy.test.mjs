@@ -1,0 +1,14 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import {preflightRisk,qaCustomerReply,isClosedNow,shouldAutoSend} from '../src/policy.mjs';
+import {verifyYCloudSignature,encryptText,decryptText,stableCustomerRef} from '../src/crypto.mjs';
+test('payment uncertainty blocks',()=>assert.equal(preflightRisk('M-Pesa deducted but order not paid').blocking,true));
+test('normal product question does not pre-block',()=>assert.equal(preflightRisk('Do you have Beauty of Joseon sunscreen?').blocking,false));
+test('qa blocks meta text',()=>assert.equal(qaCustomerReply('Here is a reply ready to send').pass,false));
+test('hours fail closed when not configured',()=>assert.deepEqual(isClosedNow({configured:false}),{closed:false,configured:false,reason:'SCHEDULE_NOT_CONFIGURED'}));
+test('after-hours sends only when closed',()=>assert.equal(shouldAutoSend({mode:'AFTER_HOURS',owner:'AI',riskBlocking:false,hoursResult:{configured:true,closed:true}}).send,true));
+test('human ownership blocks',()=>assert.equal(shouldAutoSend({mode:'AI_ALWAYS',owner:'HUMAN',riskBlocking:false,hoursResult:{configured:true,closed:true}}).send,false));
+test('ycloud signature verification',()=>{const raw='{"id":"evt_1"}',secret='x'.repeat(32),ts=1700000000,sig=crypto.createHmac('sha256',secret).update(`${ts}.${raw}`).digest('hex');assert.equal(verifyYCloudSignature(raw,`t=${ts},s=${sig}`,secret,ts),true)});
+test('encryption roundtrip',()=>{const s='z'.repeat(40),c=encryptText('hello',s);assert.notEqual(c,'hello');assert.equal(decryptText(c,s),'hello')});
+test('customer reference stable and pseudonymous',()=>{const s='y'.repeat(30);assert.equal(stableCustomerRef('+254700000000',s),stableCustomerRef('+254700000000',s));assert.ok(!stableCustomerRef('+254700000000',s).includes('2547'))});
