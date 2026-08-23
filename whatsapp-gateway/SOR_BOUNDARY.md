@@ -1,0 +1,1 @@
+The gateway is an operational system of engagement and conversation-workflow store. It is not authoritative for product identity/formula, price, stock, payment, order/delivery, authenticity, regulatory status, customer-profile facts or marketing consent. Changing facts must be retrieved from their governing Simpli systems.
