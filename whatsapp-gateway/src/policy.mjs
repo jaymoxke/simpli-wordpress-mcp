@@ -1,4 +1,4 @@
-const URGENT_SAFETY=/\b(difficulty breathing|can'?t breathe|shortness of breath|anaphyl|faint(?:ed|ing)?|collapse|tongue swelling|lip swelling|eye swelling|face swelling|severe burn|severe blister|emergency|hospital|ambulance)\b/i;
+const URGENT_SAFETY=/\b(difficulty breathing|breathing difficulty|struggl(?:e|ing) to breathe|can'?t breathe|short(?:ness)? of breath|anaphyl|faint(?:ed|ing)?|collapse|(?:eye|eyes|lip|lips|tongue|face|facial)(?: is| are)? swelling|(?:eye|lip|tongue|face|facial) swelling|severe burn|severe blister|emergency|hospital|ambulance)\b/i;
 const PRESCRIPTION=/\b(prescription|prescribed|tretinoin|isotretinoin|accutane|retinoic acid|dose|dosage|taper|dermatologist diagnosed|doctor prescribed)\b/i;
 const REACTION=/\b(burning|stinging|itching|hives|rash|swelling|blister(?:ing)?|painful redness|severe redness|reaction|irritation|skin is peeling badly)\b/i;
 const PAYMENT=/\b(mpesa|m-pesa|paid|payment|charged|deducted|transaction|stk|pay again|duplicate payment|money sent|payment failed|payment pending|not reflected)\b/i;
