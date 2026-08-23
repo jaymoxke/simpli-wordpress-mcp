@@ -7,15 +7,14 @@ const model = env.OPENAI_MODEL || 'gpt-5.6';
 function assert(condition, code) {
   if (!condition) throw new Error(code);
 }
-function assertSimpliIdentity(text, codePrefix) {
+function assertNoInternalIdentityLeak(text, codePrefix) {
   const value = String(text || '').trim();
-  assert(/\b(?:i['’]?m|i am)\s+simpli\b/i.test(value), `${codePrefix}_NOT_SIMPLI`);
   assert(!/\b(?:luna|language model|chatbot|bot)\b/i.test(value), `${codePrefix}_INTERNAL_NAME_LEAK`);
   assert(value.length > 0 && value.length <= 500, `${codePrefix}_RESPONSE_LENGTH`);
   return value;
 }
 
-async function runCase(id, body, {humanGreeting=false}={}) {
+async function runCase(id, body, {humanGreeting=false, customerAlreadyNamed=false, expectedGreeting=null, requireSelfIntro=false}={}) {
   const inbound = { direction: 'INBOUND', message_type: 'text', body };
   const result = await runAdvisor({
     apiKey: env.OPENAI_API_KEY,
@@ -25,11 +24,13 @@ async function runCase(id, body, {humanGreeting=false}={}) {
   });
   assert(!result.blocked, `${id}_ADVISOR_BLOCKED`);
   const packet = applyGreetingPolicy({text:body,messages:[inbound],packet:result.packet});
-  const text = assertSimpliIdentity(packet?.response_text, id.toUpperCase());
+  const text = assertNoInternalIdentityLeak(packet?.response_text, id.toUpperCase());
+  if(requireSelfIntro) assert(/\b(?:i['’]?m|i am)\s+simpli\b/i.test(text), `${id}_NOT_SIMPLI`);
+  if(customerAlreadyNamed) assert(!/\b(?:i['’]?m|i am)\s+simpli\b/i.test(text), `${id}_REPEATED_SIMPLI`);
   if(humanGreeting) {
-    assert(greetingReplyLooksHuman(text), `${id}_NOT_HUMAN_GREETING`);
+    assert(greetingReplyLooksHuman(text,{identityAlreadyKnown:customerAlreadyNamed}), `${id}_NOT_HUMAN_GREETING`);
     assert(!/\b(?:acne|anua|niacinamide|sunscreen|cleanser|moisturi[sz]er|serum|toner|price|stock|routine|product|choose|checking)\b/i.test(text), `${id}_UNSOLICITED_MENU`);
-    assert(text === "Hi 😊 I’m Simpli. How are you?", `${id}_GREETING_SHAPE_DRIFT`);
+    if(expectedGreeting) assert(text === expectedGreeting, `${id}_GREETING_SHAPE_DRIFT`);
   }
   console.log(JSON.stringify({
     event: 'SIMPLI_IDENTITY_SELF_TEST_CASE',
@@ -38,6 +39,7 @@ async function runCase(id, body, {humanGreeting=false}={}) {
     configuration_id: result.configurationId || AI_CONFIGURATION_ID,
     model,
     identity: 'Simpli',
+    customer_already_named: customerAlreadyNamed,
     final_customer_reply_chars: text.length,
     human_greeting: humanGreeting,
   }));
@@ -45,9 +47,9 @@ async function runCase(id, body, {humanGreeting=false}={}) {
 
 async function main() {
   assert(env.OPENAI_API_KEY, 'OPENAI_API_KEY_MISSING');
-  await runCase('ordinary-first-reply', 'Hi', {humanGreeting:true});
-  await runCase('reported-hi-simpli', 'Hi Simpli', {humanGreeting:true});
-  await runCase('explicit-identity-question', 'Hi, who am I speaking to?');
+  await runCase('ordinary-first-reply', 'Hi', {humanGreeting:true,requireSelfIntro:true,expectedGreeting:'Hi 😊 I’m Simpli. How are you?'});
+  await runCase('reported-hi-simpli', 'Hi Simpli', {humanGreeting:true,customerAlreadyNamed:true,expectedGreeting:'Hi 😊 How are you?'});
+  await runCase('explicit-identity-question', 'Hi, who am I speaking to?', {requireSelfIntro:true});
   console.log(JSON.stringify({
     event: 'SIMPLI_IDENTITY_SELF_TEST',
     pass: true,
