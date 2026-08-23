@@ -7,6 +7,6 @@
   "scripts": {
     "start": "node src/server.mjs",
     "test": "node --test",
-    "check": "node --check src/server.mjs && node --check src/policy.mjs && node --check src/crypto.mjs && node --check src/db.mjs && node --check src/ycloud.mjs && node --check src/openai.mjs"
+    "check": "node --check src/server.mjs && node --check src/admin.js && node --check src/policy.mjs && node --check src/crypto.mjs && node --check src/db.mjs && node --check src/ycloud.mjs && node --check src/openai.mjs"
   }
 }
