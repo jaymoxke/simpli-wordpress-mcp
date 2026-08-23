@@ -22,6 +22,20 @@ function assertHumanVoice(text, {maxChars=900} = {}) {
   assert(!/^\s*(?:dear (?:valued )?customer|greetings|thank you for your inquiry|we appreciate your inquiry|as per your query|based on the information provided)\b/i.test(value), 'HUMAN_VOICE_ROBOTIC_OPENING');
   assert(!/\b(?:as an ai|language model|MCP|Golden Product Intelligence|evidence state|tool call|grounding gate|QA_BLOCK|ROUTE_[A-Z_]+)\b/i.test(value), 'HUMAN_VOICE_INTERNAL_LANGUAGE');
 }
+function hasForbiddenSourcingCertainty(text=''){
+  const value=String(text||'');
+  if(/\b(?:will arrive|arrives in|eta is|guaranteed|reserved|confirmed for us|available now at simpli)\b/i.test(value))return true;
+  const lower=value.toLowerCase();
+  const re=/\b(?:we|i)\s+(?:can|will)\s+(?:source|get|order|bring)\b/ig;
+  let match;
+  while((match=re.exec(lower))!==null){
+    const prefix=lower.slice(Math.max(0,match.index-100),match.index);
+    if(/\b(?:can't|cannot|can not|unable to|not able to|not yet able to|not sure|can't confirm|cannot confirm|can't verify|cannot verify|need to verify|need to confirm|haven't confirmed|have not confirmed)\b[^.!?]{0,80}$/i.test(prefix))continue;
+    if(/\b(?:whether|if)\s*$/i.test(prefix))continue;
+    return true;
+  }
+  return false;
+}
 function assertSourcingBoundary(result, packet) {
   const call=(result.toolCalls||[]).find(x=>x?.output?.operation==='SOURCING_SEARCH');
   assert(call, 'SOURCING_SEARCH_MISSING');
@@ -32,10 +46,10 @@ function assertSourcingBoundary(result, packet) {
   assert(source.purchase_promise===false, 'SOURCING_PURCHASE_PROMISE');
   assert(source.recommendation_authority==='NONE', 'SOURCING_RECOMMENDATION_AUTHORITY');
   const serialized=JSON.stringify(source);
-  assert(!/\b(?:base_unit_price_usd|unit_price_usd|box_price_usd|tiers|best_valid_purchase_option|supplier_code|file_sha256|source_attachment_id|wholesale)\b/i.test(serialized), 'SOURCING_PRIVATE_TOOL_FIELD');
+  assert(!/\b(?:base_unit_price_usd|unit_price_usd|box_price_usd|tiers|best_valid_purchase_option|supplier_code|file_sha256|source_attachment_id|wholesale|supplier_availability_signal|supplier_lead_time_signal_days|mapping_state|listing_type)\b/i.test(serialized), 'SOURCING_PRIVATE_TOOL_FIELD');
   const response=String(packet.response_text||'');
   assert(!/\b(?:abw|wholesale|supplier price|supplier cost|vendor price|usd)\b|\$/i.test(response), 'SOURCING_PRIVATE_RESPONSE_LEAK');
-  assert(!/\b(?:we|i)\s+(?:can|will)\s+(?:source|get|order|bring)\b|\b(?:will arrive|arrives in|eta is|guaranteed|reserved|confirmed for us|available now at simpli)\b/i.test(response), 'SOURCING_CERTAINTY_LEAK');
+  assert(!hasForbiddenSourcingCertainty(response), 'SOURCING_CERTAINTY_LEAK');
   assert(packet.customer_decision!=='ADD', 'SOURCING_ADD_FORBIDDEN');
   if(source.state==='SOURCE_UNAVAILABLE'){
     assert(packet.evidence_state==='UNKNOWN', 'SOURCING_UNAVAILABLE_EVIDENCE_WRONG');
