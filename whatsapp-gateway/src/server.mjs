@@ -7,6 +7,7 @@ import { stableCustomerRef, verifyYCloudSignature, signSession, verifySession } 
 import { preflightRisk, safeEscalationReply, qaCustomerReply, isClosedNow, shouldAutoSend } from './policy.mjs';
 import { sendText } from './ycloud.mjs';
 import { runAdvisor } from './openai.mjs';
+import { applyGreetingPolicy } from './greeting-policy.mjs';
 
 const env = process.env;
 const PORT = Number(env.PORT || 3000);
@@ -81,7 +82,7 @@ async function processInbound(event) {
   try { advisor = await runAdvisor({ apiKey: env.OPENAI_API_KEY, model: env.OPENAI_MODEL || 'gpt-5.6', mcpUrl, mcpToken: env.SIMPLI_MCP_TOKEN, messages: recent, conversationId: conv.id, previousResponseId: current.last_response_id }); }
   catch (err) { await db.escalate(conv.id, 'AI_RUNTIME_FAILURE', ['AI']); await db.audit(conv.id, 'AI_FAILURE', 'SYSTEM', { message: String(err.message).slice(0, 300) }); await db.updateConversation(conv.id, { state: 'WAITING_FOR_SIMPLI', control_state: 'QA_BLOCK' }); return; }
   if (advisor.blocked) { await db.escalate(conv.id, advisor.blockReason, ['TOOL_WRITE_ATTEMPT']); await db.updateConversation(conv.id, { owner: 'HUMAN', state: 'ESCALATED', control_state: 'QA_BLOCK', last_response_id: advisor.responseId }); return; }
-  const p = advisor.packet;
+  const p = applyGreetingPolicy({ text, messages: recent, packet: advisor.packet });
   const qa = qaCustomerReply(p.response_text);
   const modelRisk = (p.risk_flags || []).length > 0 || p.handoff_required;
 
