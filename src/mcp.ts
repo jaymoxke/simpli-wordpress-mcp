@@ -20,6 +20,9 @@ type GatewayScope = "wordpress:read" | "wordpress:write" | "wordpress:dangerous"
 
 type BackendOutput = Awaited<ReturnType<WordPressClient["callTool"]>>;
 
+const WHATSAPP_CLIENT_ID = "simpli-whatsapp-intelligence";
+const WHATSAPP_ALLOWED_TOOLS = new Set(["simpli_whatsapp_read"]);
+
 const LEGACY_ABILITY_ALIASES: Record<string, { abilityName: string; scope: GatewayScope }> = {
   "core/get-site-info": { abilityName: "wordpress/site-info.get", scope: "wordpress:read" },
   "simpli/get-product-brand-description": {
@@ -213,6 +216,7 @@ export function createMcpServer(
   logger: Logger,
 ): Server {
   const browserQa = new BrowserQaClient(config, logger);
+  const isWhatsappClient = auth.clientId === WHATSAPP_CLIENT_ID;
   const server = new Server(
     { name: "simpli-mcp", version: "2.1.0" },
     {
@@ -225,12 +229,23 @@ export function createMcpServer(
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     requireScope(auth, "wordpress:read");
     const tools = await wordpress.listTools();
-    return { tools: tools.map(toMcpTool) };
+    const visibleTools = isWhatsappClient
+      ? tools.filter((tool) => WHATSAPP_ALLOWED_TOOLS.has(tool.name))
+      : tools;
+    return { tools: visibleTools.map(toMcpTool) };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const toolName = request.params.name;
     try {
+      if (isWhatsappClient && !WHATSAPP_ALLOWED_TOOLS.has(toolName)) {
+        throw new WordPressRequestError(
+          "This credential is restricted to the Simpli WhatsApp safe read facade.",
+          403,
+          { allowedTools: [...WHATSAPP_ALLOWED_TOOLS] },
+        );
+      }
+
       const args = asArguments(request.params.arguments);
       let output: BackendOutput;
       let routedToolName = toolName;
