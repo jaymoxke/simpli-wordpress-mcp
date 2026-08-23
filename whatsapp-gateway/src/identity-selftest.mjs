@@ -1,4 +1,5 @@
 import { runAdvisor, AI_CONFIGURATION_ID } from './openai.mjs';
+import { applyGreetingPolicy, greetingReplyLooksHuman } from './greeting-policy.mjs';
 
 const env = process.env;
 const model = env.OPENAI_MODEL || 'gpt-5.6';
@@ -14,15 +15,22 @@ function assertSimpliIdentity(text, codePrefix) {
   return value;
 }
 
-async function runCase(id, body) {
+async function runCase(id, body, {humanGreeting=false}={}) {
+  const inbound = { direction: 'INBOUND', message_type: 'text', body };
   const result = await runAdvisor({
     apiKey: env.OPENAI_API_KEY,
     model,
-    messages: [{ direction: 'INBOUND', message_type: 'text', body }],
+    messages: [inbound],
     conversationId: `selftest-simpli-identity-${id}`,
   });
   assert(!result.blocked, `${id}_ADVISOR_BLOCKED`);
-  const text = assertSimpliIdentity(result.packet?.response_text, id.toUpperCase());
+  const packet = applyGreetingPolicy({text:body,messages:[inbound],packet:result.packet});
+  const text = assertSimpliIdentity(packet?.response_text, id.toUpperCase());
+  if(humanGreeting) {
+    assert(greetingReplyLooksHuman(text), `${id}_NOT_HUMAN_GREETING`);
+    assert(!/\b(?:acne|anua|niacinamide|sunscreen|cleanser|moisturi[sz]er|serum|toner|price|stock|routine|product|choose|checking)\b/i.test(text), `${id}_UNSOLICITED_MENU`);
+    assert(text === "Hi 😊 I’m Simpli. How are you?", `${id}_GREETING_SHAPE_DRIFT`);
+  }
   console.log(JSON.stringify({
     event: 'SIMPLI_IDENTITY_SELF_TEST_CASE',
     case_id: id,
@@ -30,13 +38,15 @@ async function runCase(id, body) {
     configuration_id: result.configurationId || AI_CONFIGURATION_ID,
     model,
     identity: 'Simpli',
-    response_chars: text.length,
+    final_customer_reply_chars: text.length,
+    human_greeting: humanGreeting,
   }));
 }
 
 async function main() {
   assert(env.OPENAI_API_KEY, 'OPENAI_API_KEY_MISSING');
-  await runCase('ordinary-first-reply', 'Hi');
+  await runCase('ordinary-first-reply', 'Hi', {humanGreeting:true});
+  await runCase('reported-hi-simpli', 'Hi Simpli', {humanGreeting:true});
   await runCase('explicit-identity-question', 'Hi, who am I speaking to?');
   console.log(JSON.stringify({
     event: 'SIMPLI_IDENTITY_SELF_TEST',
@@ -44,7 +54,7 @@ async function main() {
     configuration_id: AI_CONFIGURATION_ID,
     model,
     identity: 'Simpli',
-    cases: 2,
+    cases: 3,
   }));
 }
 
