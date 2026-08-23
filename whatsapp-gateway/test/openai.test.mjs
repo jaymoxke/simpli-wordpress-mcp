@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {groundingRequirement,requiresLiveProductTruth,runAdvisor,validateGrounding,AI_CONFIGURATION_ID} from '../src/openai.mjs';
+import {groundingRequirement,requiresLiveProductTruth,runAdvisor,validateGrounding,normalizeMcpOutput,AI_CONFIGURATION_ID} from '../src/openai.mjs';
 
 const BASE_PACKET={
   primary_intent:'PRICE_AVAILABILITY',advisor_action:'ANSWER_DIRECT',specialist_route:'PRODUCT_INTELLIGENCE',control_state:'NONE',
@@ -9,13 +9,30 @@ const BASE_PACKET={
 };
 const GOLDEN_INTELLIGENCE={state:'STATE_VERIFIED',admission:{all_passed:true}};
 const REVIEW_INTELLIGENCE={state:'REVIEW_REQUIRED',admission:{all_passed:false}};
+const MCP_LABEL='Simpli tool simpli_whatsapp_read completed.';
 function packet(overrides={}){return{...BASE_PACKET,...overrides};}
-function mcp(operation,{error=null,status=undefined,payload={}}={}){return{type:'mcp_call',name:'simpli_whatsapp_read',server_label:'simpli',error,status,output:JSON.stringify({state:'STATE_VERIFIED',operation,...payload})};}
+function mcp(operation,{error=null,status=undefined,payload={},labeled=true}={}){const body=JSON.stringify({state:'STATE_VERIFIED',operation,...payload});return{type:'mcp_call',name:'simpli_whatsapp_read',server_label:'simpli',error,status,output:labeled?`${MCP_LABEL}\n${body}`:body};}
 function productGet({admitted=true}={}){return mcp('PRODUCT_GET',{payload:{product_intelligence:admitted?GOLDEN_INTELLIGENCE:REVIEW_INTELLIGENCE}});}
 function goldenList({admitted=true}={}){return mcp('GOLDEN_LIST',{payload:{items:admitted?[{product_intelligence:GOLDEN_INTELLIGENCE}]:[{product_intelligence:REVIEW_INTELLIGENCE}]}});}
 function mockResponse(output=[],p=BASE_PACKET){return{ok:true,text:async()=>JSON.stringify({id:'resp_test',output,output_text:JSON.stringify(p)})};}
 
 test('configuration identity is explicit',()=>assert.equal(AI_CONFIGURATION_ID,'SIMPLI_WA_LUNA_EPITOME_SHADOW_V1'));
+
+test('normalizes the actual Simpli labeled MCP output string',()=>{
+  const parsed=normalizeMcpOutput(`${MCP_LABEL}\n${JSON.stringify({state:'STATE_VERIFIED',operation:'PRODUCT_GET',product_intelligence:GOLDEN_INTELLIGENCE})}`);
+  assert.equal(parsed.operation,'PRODUCT_GET');
+  assert.equal(parsed.product_intelligence.admission.all_passed,true);
+});
+
+test('normalizes direct JSON and supported MCP content envelopes',()=>{
+  assert.equal(normalizeMcpOutput(JSON.stringify({operation:'PRODUCT_SEARCH'})).operation,'PRODUCT_SEARCH');
+  const wrapped={content:[{type:'text',text:`${MCP_LABEL}\n${JSON.stringify({operation:'GOLDEN_LIST',items:[]})}`}],structuredContent:{operation:'GOLDEN_LIST',items:[]}};
+  assert.equal(normalizeMcpOutput(wrapped).operation,'GOLDEN_LIST');
+});
+
+test('truncated MCP output is not admitted as evidence',()=>{
+  assert.equal(normalizeMcpOutput(`${MCP_LABEL}\n{"operation":"PRODUCT_GET"}\n\n[Output truncated: 300000 bytes total; limit 262144 bytes.]`),null);
+});
 
 test('grounding classifier distinguishes commerce detail comparison and recommendation',()=>{
   assert.equal(requiresLiveProductTruth('How much is Beauty of Joseon Relief Sun Aqua-Fresh?'),true);
@@ -36,6 +53,8 @@ test('price question forces the safe MCP facade and stays stateless at OpenAI',a
     assert.equal(requestBody.metadata.configuration_id,AI_CONFIGURATION_ID);
     assert.equal('previous_response_id' in requestBody,false);
     assert.equal(result.toolCalls[0].name,'simpli_whatsapp_read');
+    assert.equal(result.toolCalls[0].output.operation,'PRODUCT_SEARCH');
+    assert.equal(result.toolCalls[0].labeled_output,true);
   }finally{globalThis.fetch=original;}
 });
 
@@ -57,7 +76,7 @@ test('exact product detail can answer only after admitted PRODUCT_GET',async()=>
   const original=globalThis.fetch;
   const p=packet({primary_intent:'PRODUCT_INFO',evidence_state:'GOLDEN_PRODUCT_VERIFIED',response_text:'Use it as the final morning step.'});
   globalThis.fetch=async()=>mockResponse([mcp('PRODUCT_SEARCH'),productGet()],p);
-  try{const result=await runAdvisor({apiKey:'test-key',mcpUrl:'https://example.test/mcp',mcpToken:'test-token',messages:[{direction:'INBOUND',body:'How to use this sunscreen?'}],conversationId:'conv-detail'});assert.equal(result.packet.evidence_state,'GOLDEN_PRODUCT_VERIFIED');}finally{globalThis.fetch=original;}
+  try{const result=await runAdvisor({apiKey:'test-key',mcpUrl:'https://example.test/mcp',mcpToken:'test-token',messages:[{direction:'INBOUND',body:'How to use this sunscreen?'}],conversationId:'conv-detail'});assert.equal(result.packet.evidence_state,'GOLDEN_PRODUCT_VERIFIED');assert.equal(result.toolCalls[1].output.product_intelligence.admission.all_passed,true);}finally{globalThis.fetch=original;}
 });
 
 test('non-Golden PRODUCT_GET cannot support a semantic direct answer',()=>{

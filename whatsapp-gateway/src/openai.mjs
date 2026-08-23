@@ -66,6 +66,7 @@ CUSTOMER RESPONSE
 Return only the required structured response.`;
 
 const WHATSAPP_READ_FACADE='simpli_whatsapp_read';
+const MCP_COMPLETION_PREFIX=`Simpli tool ${WHATSAPP_READ_FACADE} completed.`;
 const CURRENT_COMMERCE=/\b(how much|price|prices|cost|costs|cheaper|more expensive|in stock|out of stock|stock|available|availability|do you have|have you got|currently available)\b/i;
 const PRODUCT_COMPARE=/\b(compare|comparison|difference between|vs\.?|versus|which (?:one )?is better|better between|choose between)\b/i;
 const PRODUCT_DETAIL=/\b(ingredients?|inci|formula|full ingredient|how to use|directions|best for|suitable for|texture|finish|routine role|what does this product|tell me about this product|worth buying)\b/i;
@@ -81,14 +82,29 @@ export function groundingRequirement(text=''){
   return{required:false,kind:'NONE'};
 }
 function latestInboundText(messages=[]){for(let i=messages.length-1;i>=0;i--){const m=messages[i];if(m?.direction==='INBOUND'&&typeof m.body==='string')return m.body;}return'';}
-function parseMcpOutput(value){
+function parseJsonObject(text){
+  if(typeof text!=='string'||!text.trim())return null;
+  try{const parsed=JSON.parse(text);return typeof parsed==='object'&&parsed!==null&&!Array.isArray(parsed)?parsed:null;}catch{return null;}
+}
+export function normalizeMcpOutput(value){
   if(value==null)return null;
-  if(typeof value==='object')return value;
+  if(typeof value==='object'&&!Array.isArray(value)){
+    if(value.structuredContent&&typeof value.structuredContent==='object'&&!Array.isArray(value.structuredContent))return value.structuredContent;
+    if(Array.isArray(value.content)){
+      for(const part of value.content){if(part?.type==='text'){const nested=normalizeMcpOutput(part.text);if(nested)return nested;}}
+    }
+    return value;
+  }
   if(typeof value!=='string')return null;
-  try{return JSON.parse(value);}catch{return null;}
+  const text=value.trim();
+  if(!text||text.includes('[Output truncated:'))return null;
+  const direct=parseJsonObject(text);
+  if(direct)return direct;
+  if(text.startsWith(MCP_COMPLETION_PREFIX))return parseJsonObject(text.slice(MCP_COMPLETION_PREFIX.length).trim());
+  return null;
 }
 function completedMcpCalls(data){
-  return (data.output||[]).filter(x=>x?.type==='mcp_call').map(x=>({name:x.name,server_label:x.server_label,status:x.status,error:x.error||null,output:parseMcpOutput(x.output)}));
+  return (data.output||[]).filter(x=>x?.type==='mcp_call').map(x=>({name:x.name,server_label:x.server_label,status:x.status,error:x.error||null,output:normalizeMcpOutput(x.output),raw_output_type:typeof x.output,labeled_output:typeof x.output==='string'&&x.output.trim().startsWith(MCP_COMPLETION_PREFIX),truncated_output:typeof x.output==='string'&&x.output.includes('[Output truncated:')}));
 }
 function successfulFacadeCalls(toolCalls){return toolCalls.filter(x=>x.name===WHATSAPP_READ_FACADE&&x.server_label==='simpli'&&!x.error&&(!x.status||x.status==='completed'));}
 function admittedProductIntelligence(value){return value?.state==='STATE_VERIFIED'&&value?.admission?.all_passed===true;}
@@ -104,6 +120,7 @@ export function validateGrounding({requirement,toolCalls,packet}){
   if(!requirement?.required)return true;
   const calls=successfulFacadeCalls(toolCalls);
   if(calls.length===0)throw new Error('GROUNDED_TOOL_REQUIRED_BUT_NOT_USED');
+  if(calls.some(call=>call.truncated_output))throw new Error('GROUNDED_TOOL_OUTPUT_TRUNCATED');
   const abstaining=safeAbstention(packet);
   if(requirement.kind==='PRODUCT_DETAIL'&&admittedProductGetCount(calls)<1&&!abstaining)throw new Error('PRODUCT_DETAIL_EVIDENCE_INSUFFICIENT');
   if(requirement.kind==='PRODUCT_COMPARE'&&admittedProductGetCount(calls)<2&&!abstaining)throw new Error('PRODUCT_COMPARE_EVIDENCE_INSUFFICIENT');
@@ -136,6 +153,7 @@ export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,message
   const data=JSON.parse(raw),approval=data.output?.find(x=>x.type==='mcp_approval_request');
   if(approval)return{blocked:true,blockReason:'UNEXPECTED_MCP_APPROVAL_REQUEST',responseId:data.id,packet:null,toolCalls:[]};
   const toolCalls=completedMcpCalls(data);
+  console.log(JSON.stringify({event:'MCP_GROUNDING_TRACE',configuration_id:AI_CONFIGURATION_ID,calls:toolCalls.map(call=>({name:call.name,status:call.status||null,error:!!call.error,raw_output_type:call.raw_output_type,labeled_output:call.labeled_output,truncated_output:call.truncated_output,operation:call.output?.operation||null,state:call.output?.state||null,product_intelligence_state:call.output?.product_intelligence?.state||null,admission_all_passed:call.output?.product_intelligence?.admission?.all_passed===true,golden_items_admitted:Array.isArray(call.output?.items)?call.output.items.filter(item=>admittedProductIntelligence(item?.product_intelligence)).length:null}))}));
   for(const call of toolCalls){if(call.name===WHATSAPP_READ_FACADE&&call.error)throw new Error('GROUNDED_TOOL_FAILED');if(call.name===WHATSAPP_READ_FACADE&&call.status&&call.status!=='completed')throw new Error(`GROUNDED_TOOL_FAILED:${call.status}`);}
   const text=data.output_text||data.output?.flatMap(x=>x.content||[]).find(c=>c.type==='output_text')?.text;
   if(!text)throw new Error('OpenAI returned no output text');
