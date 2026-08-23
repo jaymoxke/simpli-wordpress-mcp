@@ -1,5 +1,6 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { URL } from 'node:url';
 import { createDb } from './db.mjs';
 import { stableCustomerRef, verifyYCloudSignature, signSession, verifySession } from './crypto.mjs';
@@ -13,16 +14,18 @@ const db = createDb(env.DATABASE_PATH || env.DATABASE_URL || '/data/simpli-whats
 const retentionDays = Math.max(1, Math.min(365, Number(env.RETENTION_DAYS || 30)));
 const defaultMode = env.DEFAULT_MODE || 'SHADOW';
 const mcpUrl = env.SIMPLI_MCP_URL || '';
+const adminJs = fs.readFileSync(new URL('./admin.js', import.meta.url), 'utf8');
 const adminHeaders = {
   'cache-control': 'no-store',
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
   'referrer-policy': 'no-referrer',
-  'content-security-policy': "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+  'content-security-policy': "default-src 'self'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
 };
 
 function json(res, status, body, headers = {}) { const b = JSON.stringify(body); res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(b), ...headers }); res.end(b); }
 function html(res, status, body, headers = {}) { res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', ...headers }); res.end(body); }
+function javascript(res, status, body, headers = {}) { res.writeHead(status, { 'content-type': 'application/javascript; charset=utf-8', 'content-length': Buffer.byteLength(body), ...headers }); res.end(body); }
 async function readBody(req, max = 1024 * 1024) { const chunks = []; let n = 0; for await (const c of req) { n += c.length; if (n > max) throw new Error('BODY_TOO_LARGE'); chunks.push(c); } return Buffer.concat(chunks).toString('utf8'); }
 function cookies(req) { return Object.fromEntries(String(req.headers.cookie || '').split(';').map(x => x.trim()).filter(Boolean).map(x => { const i = x.indexOf('='); return [x.slice(0, i), decodeURIComponent(x.slice(i + 1))]; })); }
 function isAdmin(req) { const token = cookies(req).simpli_wa_admin; return !!verifySession(token, env.ADMIN_SESSION_SECRET); }
@@ -32,22 +35,13 @@ function adminPage() {
 <style>
 body{font-family:system-ui;margin:0;background:#f6f7f8;color:#171717}.wrap{max-width:1400px;margin:auto;padding:24px}.bar{display:flex;justify-content:space-between;align-items:center;gap:12px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:20px 0}.card,.panel{background:white;border:1px solid #e3e5e7;border-radius:14px;padding:16px;margin-bottom:16px}.metric{font-size:28px;font-weight:700}.tablewrap{overflow:auto}table{width:100%;border-collapse:collapse}th,td{text-align:left;vertical-align:top;padding:10px;border-bottom:1px solid #eee;font-size:14px}th{white-space:nowrap}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#eee;font-size:12px}.ok{background:#e8f6ed}.bad{background:#fbe9e9}.shadow{background:#eef2ff}.draft{white-space:pre-wrap;min-width:280px;max-width:520px;line-height:1.45}.basis{max-width:360px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}button,select,input{padding:9px 12px;border:1px solid #cfd3d7;border-radius:9px;background:white}button{cursor:pointer}.danger{background:#111;color:white}.muted{color:#666;font-size:13px}h2{margin-top:0}
 </style>
-<div class="wrap"><div class="bar"><div><h1>Simpli WhatsApp Intelligence</h1><div class="muted">After-hours support control plane · encrypted SHADOW review</div></div><button onclick="logout()">Sign out</button></div>
-<div id="status"></div>
-<div class="panel"><b>Operating mode</b> <select id="mode"><option>SHADOW</option><option>AFTER_HOURS</option><option>AI_ALWAYS</option><option>HUMAN_ONLY</option></select> <button class="danger" onclick="setMode()">Update</button><span id="modeMsg" class="muted"></span></div>
+<div class="wrap"><div class="bar"><div><h1>Simpli WhatsApp Intelligence</h1><div class="muted">After-hours support control plane · encrypted SHADOW review</div></div><button id="logoutBtn">Sign out</button></div>
+<div id="statusPanel"></div>
+<div class="panel"><b>Operating mode</b> <select id="modeSelect"><option>SHADOW</option><option>AFTER_HOURS</option><option>AI_ALWAYS</option><option>HUMAN_ONLY</option></select> <button class="danger" id="setModeBtn">Update</button><span id="modeMsg" class="muted"></span></div>
 <div class="cards" id="cards"></div>
 <div class="panel"><h2>SHADOW draft review</h2><div class="muted">Draft text and answer basis are encrypted at rest. This view is review-only and cannot send a message.</div><div class="tablewrap"><table><thead><tr><th>Time</th><th>Customer ref</th><th>Model</th><th>Intent / action</th><th>Control</th><th>QA</th><th>Live tools</th><th>Decision</th><th>Draft</th><th>Answer basis</th></tr></thead><tbody id="draftRows"></tbody></table></div></div>
 <div class="panel"><h2>Conversations</h2><div class="tablewrap"><table><thead><tr><th>Customer ref</th><th>Owner</th><th>State</th><th>Intent</th><th>Risk</th><th>Escalations</th><th>Last activity</th><th>Control</th></tr></thead><tbody id="rows"></tbody></table></div></div></div>
-<script>
-function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-async function api(path,opts={}){const r=await fetch(path,{...opts,headers:{'content-type':'application/json',...(opts.headers||{})}});if(r.status===401){location='/admin/login';throw 0}return r.json()}
-async function load(){const [s,c,d]=await Promise.all([api('/admin/api/summary'),api('/admin/api/conversations'),api('/admin/api/shadow-drafts?limit=50')]);mode.value=s.mode;cards.innerHTML=Object.entries(s.metrics).map(([k,v])=>'<div class="card"><div class="muted">'+esc(k.replaceAll('_',' '))+'</div><div class="metric">'+esc(v)+'</div></div>').join('');status.innerHTML=s.ready?'<p class="pill ok">System ready</p>':'<p class="pill shadow">SHADOW / activation incomplete</p>';rows.innerHTML=c.items.map(x=>'<tr><td class="mono">'+esc(x.customer_ref)+'</td><td>'+esc(x.owner)+'</td><td>'+esc(x.state)+'</td><td>'+esc(x.primary_intent||'—')+'</td><td>'+esc((x.risk_flags||[]).join(', ')||'—')+'</td><td>'+esc(x.open_escalations)+'</td><td>'+esc(new Date(x.last_activity_at+'Z').toLocaleString())+'</td><td>'+esc(x.control_state||'NONE')+'<br><button onclick="take(\''+esc(x.id)+'\')">Take over</button> <button onclick="releaseAI(\''+esc(x.id)+'\')">Return AI</button></td></tr>').join('');draftRows.innerHTML=d.items.length?d.items.map(x=>'<tr><td>'+esc(new Date(x.created_at+'Z').toLocaleString())+'</td><td class="mono">'+esc(x.customer_ref)+'</td><td>'+esc(x.model)+'</td><td><b>'+esc(x.primary_intent||'—')+'</b><br><span class="muted">'+esc(x.advisor_action||'—')+'</span></td><td>'+esc(x.control_state||'NONE')+(x.handoff_required?'<br><span class="pill bad">handoff</span>':'')+'</td><td><span class="pill '+(x.qa_pass?'ok':'bad')+'">'+(x.qa_pass?'PASS':'BLOCK')+'</span><br><span class="muted">'+esc((x.qa_reasons||[]).join(', '))+'</span></td><td class="mono">'+esc((x.tool_calls||[]).join(', ')||'—')+'</td><td>'+esc(x.send_decision||'—')+'</td><td><div class="draft">'+esc(x.response_text||'')+'</div></td><td class="basis">'+esc((x.answer_basis||[]).join(' · ')||'—')+'</td></tr>').join(''):'<tr><td colspan="10" class="muted">No SHADOW drafts captured yet.</td></tr>'}
-async function setMode(){await api('/admin/api/mode',{method:'POST',body:JSON.stringify({mode:mode.value})});modeMsg.textContent=' Saved';load()}
-async function take(id){await api('/admin/api/conversations/'+id+'/takeover',{method:'POST'});load()}
-async function releaseAI(id){await api('/admin/api/conversations/'+id+'/release',{method:'POST'});load()}
-async function logout(){await api('/admin/logout',{method:'POST'});location='/admin/login'}
-load();setInterval(load,15000)
-</script>`;
+<script src="/admin/app.js" defer></script>`;
 }
 
 function loginPage(error = '') { return `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Simpli WhatsApp Login</title><style>body{font-family:system-ui;background:#f6f7f8}.box{max-width:380px;margin:12vh auto;background:white;padding:28px;border:1px solid #ddd;border-radius:16px}input,button{box-sizing:border-box;width:100%;padding:12px;margin:8px 0;border:1px solid #ccc;border-radius:9px}button{background:#111;color:white}</style><div class="box"><h1>Simpli WhatsApp</h1><p>Administrator access</p>${error ? '<p>' + error + '</p>' : ''}<form method="post"><input type="password" name="password" required autocomplete="current-password"><button>Sign in</button></form></div>`; }
@@ -91,6 +85,7 @@ async function processInbound(event) {
 
   if (modeValue === 'SHADOW') {
     try {
+      const toolCalls = (advisor.toolCalls || []).map(x => x?.name).filter(Boolean);
       const draftId = await db.addShadowDraft({
         conversationId: conv.id,
         responseId: advisor.responseId,
@@ -101,13 +96,22 @@ async function processInbound(event) {
         riskFlags: p.risk_flags || [],
         handoffRequired: !!p.handoff_required,
         answerBasis: p.answer_basis || [],
-        toolCalls: (advisor.toolCalls || []).map(x => x?.name).filter(Boolean),
+        toolCalls,
         qaPass: qa.pass,
         qaReasons: qa.reasons || [],
         sendDecision: modelRisk ? 'MODEL_HANDOFF' : sendDecision.reason,
         responseText: p.response_text,
       });
-      await db.audit(conv.id, 'SHADOW_DRAFT_CAPTURED', 'AI', { draft_id: draftId, intent: p.primary_intent || null, qa_pass: qa.pass, tool_calls: (advisor.toolCalls || []).map(x => x?.name).filter(Boolean) });
+      await db.audit(conv.id, 'SHADOW_DRAFT_CAPTURED', 'AI', { draft_id: draftId, intent: p.primary_intent || null, qa_pass: qa.pass, tool_calls: toolCalls });
+      console.log(JSON.stringify({
+        event: 'SHADOW_DRAFT_CAPTURED', draft_id: draftId, model: env.OPENAI_MODEL || 'gpt-5.6',
+        primary_intent: p.primary_intent || null, advisor_action: p.advisor_action || null,
+        control_state: p.control_state || 'NONE', risk_flags: p.risk_flags || [], handoff_required: !!p.handoff_required,
+        tool_calls: toolCalls, qa_pass: qa.pass, qa_reasons: qa.reasons || [],
+        send_decision: modelRisk ? 'MODEL_HANDOFF' : sendDecision.reason,
+        encrypted_draft: true, encrypted_answer_basis: true,
+        draft_chars: String(p.response_text || '').length, answer_basis_count: Array.isArray(p.answer_basis) ? p.answer_basis.length : 0,
+      }));
     } catch (err) {
       await db.escalate(conv.id, 'SHADOW_DRAFT_PERSISTENCE_FAILURE', ['OBSERVABILITY']);
       await db.audit(conv.id, 'SHADOW_DRAFT_FAILURE', 'SYSTEM', { message: String(err.message).slice(0, 300) });
@@ -126,11 +130,24 @@ async function processInbound(event) {
     await db.audit(conv.id, 'AI_REPLY_SENT', 'AI', { intent: p.primary_intent, decision: sendDecision.reason, answer_basis: p.answer_basis || [] });
   } else {
     await db.audit(conv.id, 'AI_DRAFT_NOT_SENT', 'AI', { intent: p.primary_intent, reason: modelRisk ? 'MODEL_HANDOFF' : sendDecision.reason });
+    if (modeValue === 'SHADOW') console.log(JSON.stringify({ event: 'SHADOW_SEND_SUPPRESSED', reason: modelRisk ? 'MODEL_HANDOFF' : sendDecision.reason }));
   }
 }
 
 await db.migrate();
 if (!(await db.getSetting('mode', null))) await db.setSetting('mode', { value: defaultMode });
+const latestShadow = (await db.listShadowDrafts(1))[0] || null;
+if (latestShadow) {
+  console.log(JSON.stringify({
+    event: 'SHADOW_DRAFT_LATEST', draft_id: latestShadow.id, created_at: latestShadow.created_at,
+    model: latestShadow.model, primary_intent: latestShadow.primary_intent, advisor_action: latestShadow.advisor_action,
+    control_state: latestShadow.control_state, risk_flags: latestShadow.risk_flags || [], handoff_required: !!latestShadow.handoff_required,
+    tool_calls: latestShadow.tool_calls || [], qa_pass: !!latestShadow.qa_pass, qa_reasons: latestShadow.qa_reasons || [],
+    send_decision: latestShadow.send_decision, encrypted_draft: !!latestShadow.response_text,
+    encrypted_answer_basis: Array.isArray(latestShadow.answer_basis), draft_chars: String(latestShadow.response_text || '').length,
+    answer_basis_count: Array.isArray(latestShadow.answer_basis) ? latestShadow.answer_basis.length : 0,
+  }));
+}
 setInterval(() => db.cleanup(retentionDays).catch(() => {}), 6 * 60 * 60 * 1000).unref();
 
 const server = http.createServer(async (req, res) => {
@@ -157,6 +174,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url.pathname === '/admin/logout') { return html(res, 200, '', { ...adminHeaders, 'set-cookie': 'simpli_wa_admin=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0' }); }
     if (url.pathname.startsWith('/admin') && !isAdmin(req)) return html(res, 302, '', { ...adminHeaders, location: '/admin/login' });
+    if (req.method === 'GET' && url.pathname === '/admin/app.js') return javascript(res, 200, adminJs, adminHeaders);
     if (req.method === 'GET' && url.pathname === '/admin') return html(res, 200, adminPage(), adminHeaders);
     if (req.method === 'GET' && url.pathname === '/admin/api/summary') { const metrics = await db.summary(); const mode = await db.getSetting('mode', { value: defaultMode }); const hours = await db.getSetting('business_hours', { configured: false }); const ready = !!(env.OPENAI_API_KEY && env.YCLOUD_API_KEY && env.YCLOUD_WEBHOOK_SECRET && env.YCLOUD_FROM && mcpUrl && env.SIMPLI_MCP_TOKEN && hours.configured); return json(res, 200, { metrics, mode: typeof mode === 'string' ? mode : mode.value, ready }, adminHeaders); }
     if (req.method === 'GET' && url.pathname === '/admin/api/conversations') return json(res, 200, { items: await db.listConversations(Number(url.searchParams.get('limit') || 100)) }, adminHeaders);
