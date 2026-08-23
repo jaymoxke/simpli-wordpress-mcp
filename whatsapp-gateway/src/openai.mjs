@@ -154,10 +154,27 @@ const KEEP_CATEGORY_RULES=[
 ];
 const EXPLICIT_REPLACEMENT_NEED=/\b(?:too heavy|too greasy|white cast|stings?|burns?|irritat(?:es|ing|ed)?|break(?:s|ing)? me out|too expensive|out of stock|ran out|finished|dislike|don'?t like|want (?:a )?(?:lighter|cheaper|richer|more matte|dewier|fragrance[- ]free))\b/i;
 const SIMPLI_INTRO=/\b(?:i['’]?m|i am)\s+simpli\b/i;
-const SOURCING_PRIVATE_KEY=/\b(?:base_unit_price_usd|unit_price_usd|box_price_usd|tiers|best_valid_purchase_option|supplier_code|file_sha256|source_attachment_id|wholesale)\b/i;
+const SOURCING_PRIVATE_KEY=/\b(?:base_unit_price_usd|unit_price_usd|box_price_usd|tiers|best_valid_purchase_option|supplier_code|file_sha256|source_attachment_id|wholesale|supplier_availability_signal|supplier_lead_time_signal_days|mapping_state|listing_type)\b/i;
 const SOURCING_RESPONSE_PRIVATE=/\b(?:abw|wholesale|supplier price|supplier cost|vendor price|usd)\b|\$/i;
-const SOURCING_CERTAINTY=/\b(?:we|i)\s+(?:can|will)\s+(?:source|get|order|bring)\b|\b(?:will arrive|arrives in|eta is|guaranteed|reserved|confirmed for us|available now at simpli)\b/i;
+const SOURCING_DIRECT_CERTAINTY=/\b(?:we|i)\s+(?:can|will)\s+(?:source|get|order|bring)\b/ig;
+const SOURCING_ARRIVAL_CERTAINTY=/\b(?:will arrive|arrives in|eta is|guaranteed|reserved|confirmed for us|available now at simpli)\b/i;
 const SOURCING_UNCERTAINTY=/\b(?:possible|potential|may|might|could|not confirmed|isn't confirmed|is not confirmed|can't confirm|cannot confirm|can't verify|cannot verify|sourcing option|sourcing lead)\b/i;
+
+function sourcingCertaintyClaim(text=''){
+  const value=String(text||'');
+  if(SOURCING_ARRIVAL_CERTAINTY.test(value))return true;
+  const lower=value.toLowerCase();
+  const re=new RegExp(SOURCING_DIRECT_CERTAINTY.source,'ig');
+  let match;
+  while((match=re.exec(lower))!==null){
+    const prefix=lower.slice(Math.max(0,match.index-100),match.index);
+    const uncertaintyBefore=/\b(?:can't|cannot|can not|unable to|not able to|not yet able to|not sure|can't confirm|cannot confirm|can't verify|cannot verify|need to verify|need to confirm|haven't confirmed|have not confirmed)\b[^.!?]{0,80}$/i.test(prefix);
+    const conditionalBefore=/\b(?:whether|if)\s*$/i.test(prefix);
+    if(uncertaintyBefore||conditionalBefore)continue;
+    return true;
+  }
+  return false;
+}
 
 export function requiresLiveProductTruth(text=''){return CURRENT_COMMERCE.test(String(text||''));}
 export function existingRoutineKeepCandidate(text=''){
@@ -265,7 +282,7 @@ export function validateGrounding({requirement,toolCalls,packet}){
     if(packet?.customer_decision==='ADD')throw new Error('SOURCING_SIGNAL_CANNOT_AUTHORIZE_ADD');
     const response=String(packet?.response_text||'');
     if(SOURCING_RESPONSE_PRIVATE.test(response))throw new Error('SOURCING_PRIVATE_COMMERCIAL_LEAK');
-    if(SOURCING_CERTAINTY.test(response))throw new Error('SOURCING_CERTAINTY_FORBIDDEN');
+    if(sourcingCertaintyClaim(response))throw new Error('SOURCING_CERTAINTY_FORBIDDEN');
     if(!SOURCING_UNCERTAINTY.test(response))throw new Error('SOURCING_UNCERTAINTY_REQUIRED');
     if(source.state==='SOURCE_UNAVAILABLE'&&evidenceState!=='UNKNOWN')throw new Error('SOURCING_UNAVAILABLE_MUST_REMAIN_UNKNOWN');
     if(source.state==='STATE_VERIFIED'&&evidenceState!=='SUPPLIER_SIGNAL_VERIFIED')throw new Error('SOURCING_EVIDENCE_STATE_INVALID');
