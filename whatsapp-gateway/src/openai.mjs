@@ -159,6 +159,7 @@ const SOURCING_RESPONSE_PRIVATE=/\b(?:abw|wholesale|supplier price|supplier cost
 const SOURCING_DIRECT_CERTAINTY=/\b(?:we|i)\s+(?:can|will)\s+(?:source|get|order|bring)\b/ig;
 const SOURCING_ARRIVAL_CERTAINTY=/\b(?:will arrive|arrives in|eta is|guaranteed|reserved|confirmed for us|available now at simpli)\b/i;
 const SOURCING_UNCERTAINTY=/\b(?:possible|potential|may|might|could|not confirmed|isn't confirmed|is not confirmed|can't confirm|cannot confirm|can't verify|cannot verify|sourcing option|sourcing lead)\b/i;
+const SOURCE_UNAVAILABLE_REPLY="I can't verify a sourcing option for that right now, so I don't want to promise it.";
 
 function sourcingCertaintyClaim(text=''){
   const value=String(text||'');
@@ -328,7 +329,23 @@ export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,message
     if(packet.advisor_action!=='ANSWER_DIRECT')throw new Error('KEEP_CONTEXT_MUST_ANSWER_DIRECT');
   }
   if(requirement.kind==='SOURCING'){
+    const source=sourcingCall(successfulCalls)?.output;
     packet={...packet,primary_intent:'PRODUCT_SOURCING',specialist_route:'SUPPLY_INVENTORY_INTELLIGENCE',customer_decision:packet.customer_decision==='NO_PURCHASE'?'NO_PURCHASE':(packet.customer_decision==='NOT_NOW'?'NOT_NOW':'UNDECIDED')};
+    if(source?.state==='SOURCE_UNAVAILABLE'){
+      packet={
+        ...packet,
+        advisor_action:'ANSWER_DIRECT',
+        control_state:'CURRENT_STATE_REQUIRED',
+        evidence_state:'UNKNOWN',
+        risk_flags:[],
+        handoff_required:false,
+        questions_needed:[],
+        answer_basis:['No current supplier catalogue snapshot is available; sourcing remains unverified.'],
+        customer_decision:'UNDECIDED',
+        response_text:SOURCE_UNAVAILABLE_REPLY,
+        outcome:null,
+      };
+    }
   }
   validateGrounding({requirement,toolCalls,packet});
   packet={...packet,response_text:ensureFirstReplyIdentity(packet.response_text,messages)};
