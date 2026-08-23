@@ -1,0 +1,8 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {createDb} from '../src/db.mjs';
+
+test('shadow advisor draft and answer basis persist encrypted and are reviewable',async()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'simpli-wa-shadow-')),file=path.join(dir,'db.sqlite'),secret='s'.repeat(40);const db=createDb(file,secret);await db.migrate();const c=await db.getOrCreateConversation({id:'22222222-2222-4222-8222-222222222222',customerRef:'wa_shadow',externalUserId:'user_2',phone:'+254711111111'});await db.addShadowDraft({conversationId:c.id,responseId:'resp_1',model:'gpt-5.6-luna',primaryIntent:'PRICE_AVAILABILITY',advisorAction:'ANSWER_DIRECT',controlState:'NONE',riskFlags:[],handoffRequired:false,answerBasis:['live product lookup: KSh 1,000'],toolCalls:['simpli_whatsapp_read'],qaPass:true,qaReasons:[],sendDecision:'SHADOW_MODE',responseText:'The current price is KSh 1,000.'});const rows=await db.listShadowDrafts(10);assert.equal(rows.length,1);assert.equal(rows[0].customer_ref,'wa_shadow');assert.equal(rows[0].model,'gpt-5.6-luna');assert.deepEqual(rows[0].tool_calls,['simpli_whatsapp_read']);assert.deepEqual(rows[0].answer_basis,['live product lookup: KSh 1,000']);assert.equal(rows[0].response_text,'The current price is KSh 1,000.');assert.equal(rows[0].qa_pass,true);const raw=Buffer.concat([fs.readFileSync(file),fs.existsSync(file+'-wal')?fs.readFileSync(file+'-wal'):Buffer.alloc(0)]);assert.equal(raw.includes(Buffer.from('The current price is KSh 1,000.')),false);assert.equal(raw.includes(Buffer.from('live product lookup: KSh 1,000')),false);db.close();fs.rmSync(dir,{recursive:true,force:true})});
