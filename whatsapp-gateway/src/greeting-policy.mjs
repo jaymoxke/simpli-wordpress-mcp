@@ -7,6 +7,7 @@ const PURE_GREETING_PATTERNS = [
 const FORBIDDEN_GREETING_LEADS = /\b(?:acne|niacinamide|sunscreen|cleanser|moisturi[sz]er|serum|toner|price|stock|routine|product|choose|checking|check the|would you like help with)\b/i;
 const SIMPLI_MENTION = /\bsimpli\b/i;
 const SIMPLI_SELF_INTRO = /\b(?:i['’]?m|i am)\s+simpli\b/i;
+const LEADING_SELF_INTRO = /^(?:(hi|hello|hey|good morning|good afternoon|good evening)\b[,.!\s😊]*)?(?:i['’]?m|i am)\s+simpli\b[,.!:\-–—\s😊]*/i;
 
 export function isPureGreeting(text='') {
   const value=String(text||'').trim();
@@ -15,6 +16,27 @@ export function isPureGreeting(text='') {
 
 export function customerAlreadyNamedSimpli(text='') {
   return SIMPLI_MENTION.test(String(text||''));
+}
+
+function titleGreeting(value='') {
+  const lower=String(value||'').toLowerCase();
+  if(lower==='good morning') return 'Good morning';
+  if(lower==='good afternoon') return 'Good afternoon';
+  if(lower==='good evening') return 'Good evening';
+  if(lower==='hello') return 'Hello';
+  if(lower==='hey') return 'Hey';
+  return 'Hi';
+}
+
+export function removeRedundantSelfIntroduction(reply='') {
+  const value=String(reply||'').trim();
+  const match=value.match(LEADING_SELF_INTRO);
+  if(!match) return value;
+  const rest=value.slice(match[0].length).trim();
+  const greeting=match[1] ? `${titleGreeting(match[1])} 😊` : '';
+  if(greeting && rest) return `${greeting} ${rest}`;
+  if(greeting) return greeting;
+  return rest || 'Hi 😊';
 }
 
 export function canonicalFirstGreeting(text='') {
@@ -29,27 +51,40 @@ export function canonicalFirstGreeting(text='') {
 }
 
 export function applyGreetingPolicy({text='', messages=[], packet}) {
-  if(!packet || !isPureGreeting(text)) return packet;
+  if(!packet) return packet;
   const firstReply=!messages.some(message=>message?.direction==='OUTBOUND');
   if(!firstReply) return packet;
   const alreadyNamed=customerAlreadyNamedSimpli(text);
-  return {
-    ...packet,
-    primary_intent:'GENERAL_OR_UNCLEAR',
-    advisor_action:'ANSWER_DIRECT',
-    specialist_route:'NONE',
-    control_state:'NONE',
-    evidence_state:'NOT_REQUIRED',
-    risk_flags:[],
-    handoff_required:false,
-    questions_needed:[],
-    answer_basis:[alreadyNamed
-      ? 'Greeting-only opening; customer already addressed Simpli by name, so do not repeat the introduction.'
-      : 'Greeting-only opening; introduce Simpli once because the customer has not used the assistant name yet.'],
-    customer_decision:'UNDECIDED',
-    response_text:canonicalFirstGreeting(text),
-    outcome:null,
-  };
+
+  if(isPureGreeting(text)) {
+    return {
+      ...packet,
+      primary_intent:'GENERAL_OR_UNCLEAR',
+      advisor_action:'ANSWER_DIRECT',
+      specialist_route:'NONE',
+      control_state:'NONE',
+      evidence_state:'NOT_REQUIRED',
+      risk_flags:[],
+      handoff_required:false,
+      questions_needed:[],
+      answer_basis:[alreadyNamed
+        ? 'Greeting-only opening; customer already addressed Simpli by name, so do not repeat the introduction.'
+        : 'Greeting-only opening; introduce Simpli once because the customer has not used the assistant name yet.'],
+      customer_decision:'UNDECIDED',
+      response_text:canonicalFirstGreeting(text),
+      outcome:null,
+    };
+  }
+
+  if(alreadyNamed && SIMPLI_SELF_INTRO.test(String(packet.response_text||''))) {
+    return {
+      ...packet,
+      response_text:removeRedundantSelfIntroduction(packet.response_text),
+      answer_basis:[...(Array.isArray(packet.answer_basis)?packet.answer_basis:[]),'Customer already addressed Simpli by name; redundant self-introduction removed.'],
+    };
+  }
+
+  return packet;
 }
 
 export function greetingReplyLooksHuman(text='', {identityAlreadyKnown=false}={}) {
