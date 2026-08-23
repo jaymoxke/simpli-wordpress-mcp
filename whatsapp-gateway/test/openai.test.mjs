@@ -12,13 +12,14 @@ test('current-state detector catches price and stock questions',()=>{
   assert.equal(requiresLiveProductTruth('Hi'),false);
 });
 
-test('price question forces the safe MCP facade and accepts completed lookup',async()=>{
+test('price question forces the safe MCP facade and accepts MCP call without status field',async()=>{
   const original=globalThis.fetch;
   let requestBody;
-  globalThis.fetch=async(_url,opts)=>{requestBody=JSON.parse(opts.body);return mockResponse([{type:'mcp_call',name:'simpli_whatsapp_read',server_label:'simpli',status:'completed',output:'{}'}]);};
+  globalThis.fetch=async(_url,opts)=>{requestBody=JSON.parse(opts.body);return mockResponse([{type:'mcp_call',name:'simpli_whatsapp_read',server_label:'simpli',error:null,output:'{}'}]);};
   try{
-    const result=await runAdvisor({apiKey:'test-key',mcpUrl:'https://example.test/mcp',mcpToken:'test-token',messages:[{direction:'INBOUND',body:'How much is Beauty of Joseon Relief Sun Aqua-Fresh?'}],conversationId:'conv-1'});
+    const result=await runAdvisor({apiKey:'test-key',mcpUrl:'https://example.test/mcp',mcpToken:'test-token',messages:[{direction:'INBOUND',body:'How much is Beauty of Joseon Relief Sun Aqua-Fresh?'}],conversationId:'conv-1',previousResponseId:'resp_old'});
     assert.deepEqual(requestBody.tool_choice,{type:'mcp',server_label:'simpli',name:'simpli_whatsapp_read'});
+    assert.equal('previous_response_id' in requestBody,false);
     assert.equal(result.toolCalls[0].name,'simpli_whatsapp_read');
   }finally{globalThis.fetch=original;}
 });
@@ -31,12 +32,21 @@ test('current-state question fails closed when MCP lookup is skipped',async()=>{
   }finally{globalThis.fetch=original;}
 });
 
+test('current-state question fails closed when MCP returns an error',async()=>{
+  const original=globalThis.fetch;
+  globalThis.fetch=async()=>mockResponse([{type:'mcp_call',name:'simpli_whatsapp_read',server_label:'simpli',error:'backend failed',output:null}]);
+  try{
+    await assert.rejects(()=>runAdvisor({apiKey:'test-key',mcpUrl:'https://example.test/mcp',mcpToken:'test-token',messages:[{direction:'INBOUND',body:'Is it available?'}],conversationId:'conv-err'}),/CURRENT_STATE_TOOL_FAILED/);
+  }finally{globalThis.fetch=original;}
+});
+
 test('ordinary greeting keeps automatic tool choice',async()=>{
   const original=globalThis.fetch;
   let requestBody;
   globalThis.fetch=async(_url,opts)=>{requestBody=JSON.parse(opts.body);return mockResponse([]);};
   try{
-    await runAdvisor({apiKey:'test-key',mcpUrl:'https://example.test/mcp',mcpToken:'test-token',messages:[{direction:'INBOUND',body:'Hi'}],conversationId:'conv-3'});
+    await runAdvisor({apiKey:'test-key',mcpUrl:'https://example.test/mcp',mcpToken:'test-token',messages:[{direction:'INBOUND',body:'Hi'}],conversationId:'conv-3',previousResponseId:'resp_old'});
     assert.equal(requestBody.tool_choice,'auto');
+    assert.equal('previous_response_id' in requestBody,false);
   }finally{globalThis.fetch=original;}
 });

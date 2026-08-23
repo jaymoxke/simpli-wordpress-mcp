@@ -14,7 +14,10 @@ export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,message
   if(hasMcp){tools.push({type:'mcp',server_label:'simpli',server_url:mcpUrl,authorization:mcpToken,server_description:'Simpli governed live business truth exposed through one read-only WhatsApp facade.',require_approval:'never',allowed_tools:[WHATSAPP_READ_FACADE]});}
   const currentStateRequired=hasMcp&&requiresLiveProductTruth(latestInboundText(messages));
   const payload={model,instructions:INSTRUCTIONS,input,tools,tool_choice:currentStateRequired?{type:'mcp',server_label:'simpli',name:WHATSAPP_READ_FACADE}:'auto',reasoning:{effort:'low'},max_output_tokens:1200,store:false,metadata:{workflow:'simpli_whatsapp',conversation_id:String(conversationId).slice(0,64)},text:{format:{type:'json_schema',name:'simpli_whatsapp_packet',strict:true,schema:RESPONSE_SCHEMA}}};
-  if(previousResponseId)payload.previous_response_id=previousResponseId;
+  // Conversation history is already replayed from the encrypted local transcript above.
+  // Do not send previous_response_id while store:false: keep the advisor stateless at OpenAI
+  // and preserve Simpli's local conversation store as the continuity source of truth.
+  void previousResponseId;
   const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{authorization:`Bearer ${apiKey}`,'content-type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(70000)}),raw=await r.text();
   if(!r.ok)throw new Error(`OpenAI response failed ${r.status}: ${raw.slice(0,800)}`);
   const data=JSON.parse(raw),approval=data.output?.find(x=>x.type==='mcp_approval_request');
@@ -23,7 +26,8 @@ export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,message
   if(currentStateRequired){
     const requiredCall=toolCalls.find(x=>x.name===WHATSAPP_READ_FACADE&&x.server_label==='simpli');
     if(!requiredCall)throw new Error('CURRENT_STATE_TOOL_REQUIRED_BUT_NOT_USED');
-    if(requiredCall.error||requiredCall.status!=='completed')throw new Error(`CURRENT_STATE_TOOL_FAILED:${requiredCall.status||'unknown'}`);
+    if(requiredCall.error)throw new Error('CURRENT_STATE_TOOL_FAILED');
+    if(requiredCall.status&&requiredCall.status!=='completed')throw new Error(`CURRENT_STATE_TOOL_FAILED:${requiredCall.status}`);
   }
   const text=data.output_text||data.output?.flatMap(x=>x.content||[]).find(c=>c.type==='output_text')?.text;
   if(!text)throw new Error('OpenAI returned no output text');
