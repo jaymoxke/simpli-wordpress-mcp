@@ -29,6 +29,21 @@ describe("loadConfig", () => {
       .toThrow(/must use HTTPS/);
   });
 
+  it("accepts a distinct dedicated WhatsApp MCP token", () => {
+    const config = loadConfig({
+      ...base,
+      MCP_STATIC_TOKEN: "s".repeat(48),
+      WHATSAPP_MCP_TOKEN: "w".repeat(48),
+    });
+    expect(config.whatsappMcpToken).toBe("w".repeat(48));
+
+    expect(() => loadConfig({
+      ...base,
+      MCP_STATIC_TOKEN: "x".repeat(48),
+      WHATSAPP_MCP_TOKEN: "x".repeat(48),
+    })).toThrow(/must be distinct/);
+  });
+
   it("requires Browser QA URL and token together", () => {
     expect(() => loadConfig({
       ...base,
