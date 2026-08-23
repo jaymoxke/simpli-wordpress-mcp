@@ -16,7 +16,7 @@ test('live order and delivery state blocks until identity-bound verification exi
 test('prescription questions block without medication management advice',()=>{
   const r=preflightRisk('I use tretinoin. Should I increase it to every night?');
   assert.equal(r.blocking,true);assert.ok(r.flags.includes('PRESCRIPTION_REVIEW'));
-  assert.match(safeEscalationReply(r.flags),/won.?t tell you to start, stop, change the dose or change frequency/i);
+  assert.match(safeEscalationReply(r.flags),/won.?t advise you to start, stop, change the dose or change frequency/i);
 });
 test('urgent reaction signals outrank commerce',()=>{
   const r=preflightRisk('My eyes are swelling and I am short of breath after using it');
@@ -35,6 +35,30 @@ test('normal product question does not pre-block',()=>assert.equal(preflightRisk
 test('qa blocks internal drafting and policy labels',()=>{
   assert.equal(qaCustomerReply('Here is a reply ready to send').pass,false);
   assert.ok(qaCustomerReply('QA_BLOCK ROUTE_PRODUCT_VERIFY').reasons.includes('INTERNAL_LABEL'));
+});
+test('qa blocks AI and internal-system language',()=>{
+  assert.ok(qaCustomerReply('As an AI, I do not have access to real-time data.').reasons.includes('AI_META'));
+  assert.ok(qaCustomerReply('The MCP tool call passed the Golden Product Intelligence admission gate.').reasons.includes('INTERNAL_JARGON'));
+});
+test('qa blocks canned corporate openings and non-WhatsApp formatting',()=>{
+  assert.ok(qaCustomerReply('Dear valued customer, thank you for your inquiry.').reasons.includes('ROBOTIC_TONE'));
+  assert.ok(qaCustomerReply('```json\n{"answer":"yes"}\n```').reasons.includes('WHATSAPP_FORMAT'));
+});
+test('qa blocks fake personal experience and unsupported social proof',()=>{
+  assert.ok(qaCustomerReply('I personally use this serum and love it.').reasons.includes('FALSE_PERSONAL_EXPERIENCE'));
+  assert.ok(qaCustomerReply('Everyone loves this — it is our bestseller.').reasons.includes('UNSUPPORTED_SOCIAL_PROOF'));
+});
+test('qa blocks fake scarcity and overclaimed fit',()=>{
+  assert.ok(qaCustomerReply('Only 2 left, so buy before it is gone.').reasons.includes('SCARCITY_PRESSURE'));
+  assert.ok(qaCustomerReply('This is the perfect match for you.').reasons.includes('OVERCLAIMED_FIT'));
+});
+test('qa limits performative excitement',()=>{
+  assert.ok(qaCustomerReply('Amazing!!!! This is perfect!!!!').reasons.includes('EXCESSIVE_EXCLAMATION'));
+  assert.ok(qaCustomerReply('Great 😊✨💛').reasons.includes('EXCESSIVE_EMOJI'));
+});
+test('qa allows warm natural consultative selling',()=>{
+  const q=qaCustomerReply("It’s KSh 2,600 and currently in stock. If you prefer a very light sunscreen, this is worth considering; if your current sunscreen already feels comfortable, I’d keep what’s working.");
+  assert.equal(q.pass,true);
 });
 test('qa blocks medical certainty and prescription management',()=>{
   assert.ok(qaCustomerReply('You definitely have eczema.').reasons.includes('DIAGNOSIS_RISK'));
