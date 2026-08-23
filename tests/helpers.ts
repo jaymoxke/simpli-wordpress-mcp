@@ -12,6 +12,7 @@ export const testConfig: AppConfig = {
   oauthSigningSecret: "o".repeat(64),
   oauthAdminPassword: "correct horse battery staple",
   staticToken: "s".repeat(48),
+  whatsappMcpToken: "w".repeat(48),
   browserQaTimeoutMs: 65_000,
   abilityCacheTtlMs: 300_000,
   wordpressTimeoutMs: 10_000,
@@ -34,6 +35,24 @@ export const fakeTools: SimpliBackendTool[] = [
     title: "Simpli MCP Self Status",
     description: "Read Simpli MCP status.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "simpli_whatsapp_read",
+    title: "Simpli WhatsApp Safe Read",
+    description: "Customer-safe current product commerce lookup for the Simpli WhatsApp advisor.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: { type: "string", enum: ["PRODUCT_SEARCH", "PRODUCT_GET"] },
+        query: { type: "string" },
+        sku: { type: "string" },
+        product_id: { type: "integer" },
+        limit: { type: "integer" },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {

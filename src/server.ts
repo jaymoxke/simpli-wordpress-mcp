@@ -9,6 +9,7 @@ import type { Request, Response, NextFunction } from "express";
 import express from "express";
 import helmet from "helmet";
 import { loadConfig, redactConfig, type AppConfig } from "./config.js";
+import { constantTimeEqual } from "./crypto.js";
 import { createLogger, type Logger } from "./logger.js";
 import { createMcpServer } from "./mcp.js";
 import { createOAuthRouter, OAuthService, type AuthContext } from "./oauth.js";
@@ -64,6 +65,27 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
   const app = createMcpExpressApp({ host: "0.0.0.0" });
   const oauth = new OAuthService(config, logger);
   const sessions = new Map<string, SessionEntry>();
+
+  const authenticateMcp = (req: Request, res: Response, next: NextFunction): void => {
+    const authorization = req.header("authorization") ?? "";
+    const match = /^Bearer\s+(.+)$/i.exec(authorization);
+    if (
+      match?.[1] &&
+      config.whatsappMcpToken &&
+      constantTimeEqual(match[1], config.whatsappMcpToken)
+    ) {
+      const auth: AuthContext = {
+        subject: "simpli-whatsapp-intelligence",
+        clientId: "simpli-whatsapp-intelligence",
+        scopes: new Set(["wordpress:read"]),
+        mode: "static",
+      };
+      res.locals.auth = auth;
+      next();
+      return;
+    }
+    oauth.authenticate(req, res, next);
+  };
 
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
@@ -126,7 +148,7 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
 
   const mcpRateLimit = createRateLimit({ windowMs: 60_000, max: 300, keyPrefix: "mcp" });
 
-  app.post("/mcp", mcpRateLimit, oauth.authenticate, async (req, res) => {
+  app.post("/mcp", mcpRateLimit, authenticateMcp, async (req, res) => {
     const auth = res.locals.auth as AuthContext;
     attachSdkAuth(req, auth);
     const sessionIdHeader = req.header("mcp-session-id");
@@ -180,7 +202,7 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
     }
   });
 
-  app.get("/mcp", mcpRateLimit, oauth.authenticate, async (req, res) => {
+  app.get("/mcp", mcpRateLimit, authenticateMcp, async (req, res) => {
     const auth = res.locals.auth as AuthContext;
     attachSdkAuth(req, auth);
     const sessionId = req.header("mcp-session-id");
@@ -196,7 +218,7 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
     await entry.transport.handleRequest(req, res);
   });
 
-  app.delete("/mcp", mcpRateLimit, oauth.authenticate, async (req, res) => {
+  app.delete("/mcp", mcpRateLimit, authenticateMcp, async (req, res) => {
     const auth = res.locals.auth as AuthContext;
     attachSdkAuth(req, auth);
     const sessionId = req.header("mcp-session-id");

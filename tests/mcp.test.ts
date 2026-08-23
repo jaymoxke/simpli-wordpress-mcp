@@ -31,7 +31,7 @@ afterEach(async () => {
 
 async function listen(
   tools: SimpliBackendTool[] = fakeTools,
-): Promise<{ base: string; token: string; fake: ReturnType<typeof makeWordPressFetch> }> {
+): Promise<{ base: string; token: string; whatsappToken: string; fake: ReturnType<typeof makeWordPressFetch> }> {
   const fake = makeWordPressFetch(tools);
   const logger = createLogger(testConfig);
   const wordpress = new WordPressClient(testConfig, logger, fake.fetch);
@@ -41,7 +41,12 @@ async function listen(
   await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Test server did not bind");
-  return { base: `http://127.0.0.1:${address.port}`, token: testConfig.staticToken!, fake };
+  return {
+    base: `http://127.0.0.1:${address.port}`,
+    token: testConfig.staticToken!,
+    whatsappToken: testConfig.whatsappMcpToken!,
+    fake,
+  };
 }
 
 async function rpc(base: string, token: string, body: unknown, sessionId?: string): Promise<Response> {
@@ -104,6 +109,51 @@ describe("Simpli Railway MCP", () => {
     const names = payload.result.tools.map((tool) => tool.name);
     expect(names).toEqual(fakeTools.map((tool) => tool.name));
     expect(names.some((name) => name.toLowerCase().includes("novamira"))).toBe(false);
+  });
+
+  it("restricts the dedicated WhatsApp credential to simpli_whatsapp_read", async () => {
+    const { base, whatsappToken, fake } = await listen();
+    const sessionId = await initializedSession(base, whatsappToken);
+
+    const listed = await rpc(
+      base,
+      whatsappToken,
+      { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+      sessionId,
+    );
+    const listPayload = await readRpcJson<{ result: { tools: Array<{ name: string }> } }>(listed);
+    expect(listPayload.result.tools.map((tool) => tool.name)).toEqual(["simpli_whatsapp_read"]);
+
+    const allowed = await rpc(base, whatsappToken, {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: {
+        name: "simpli_whatsapp_read",
+        arguments: { operation: "PRODUCT_SEARCH", query: "sunscreen", limit: 3 },
+      },
+    }, sessionId);
+    const allowedPayload = await readRpcJson<{ result: { isError?: boolean } }>(allowed);
+    expect(allowedPayload.result.isError).not.toBe(true);
+
+    const blocked = await rpc(base, whatsappToken, {
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: { name: "simpli_self_status", arguments: {} },
+    }, sessionId);
+    const blockedPayload = await readRpcJson<{
+      result: { isError?: boolean; structuredContent?: { status?: number; error?: string } };
+    }>(blocked);
+    expect(blockedPayload.result.isError).toBe(true);
+    expect(blockedPayload.result.structuredContent?.status).toBe(403);
+    expect(blockedPayload.result.structuredContent?.error).toMatch(/restricted/i);
+
+    const forbiddenForward = fake.calls.find((call) =>
+      call.body?.method === "tools/call" &&
+      (call.body.params as { name?: string } | undefined)?.name === "simpli_self_status"
+    );
+    expect(forbiddenForward).toBeUndefined();
   });
 
   it("runs a read-only Simpli tool end to end", async () => {

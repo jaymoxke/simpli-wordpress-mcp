@@ -9,6 +9,7 @@ const EnvSchema = z.object({
   OAUTH_SIGNING_SECRET: z.string().min(32).optional(),
   OAUTH_ADMIN_PASSWORD: z.string().min(16).optional(),
   MCP_STATIC_TOKEN: z.string().min(32).optional(),
+  WHATSAPP_MCP_TOKEN: z.string().min(32).optional(),
   BROWSER_QA_BASE_URL: z.string().url().optional(),
   BROWSER_QA_TOKEN: z.string().min(32).optional(),
   BROWSER_QA_TIMEOUT_MS: z.coerce.number().int().min(5000).max(120000).default(65000),
@@ -46,6 +47,7 @@ export interface AppConfig {
   oauthSigningSecret?: string;
   oauthAdminPassword?: string;
   staticToken?: string;
+  whatsappMcpToken?: string;
   browserQaBaseUrl?: string;
   browserQaToken?: string;
   browserQaTimeoutMs: number;
@@ -63,6 +65,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     OAUTH_SIGNING_SECRET: environment.OAUTH_SIGNING_SECRET || undefined,
     OAUTH_ADMIN_PASSWORD: environment.OAUTH_ADMIN_PASSWORD || undefined,
     MCP_STATIC_TOKEN: environment.MCP_STATIC_TOKEN || undefined,
+    WHATSAPP_MCP_TOKEN: environment.WHATSAPP_MCP_TOKEN || undefined,
     BROWSER_QA_BASE_URL: environment.BROWSER_QA_BASE_URL || undefined,
     BROWSER_QA_TOKEN: environment.BROWSER_QA_TOKEN || undefined,
   });
@@ -71,6 +74,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     throw new Error(
       "Configure OAuth (OAUTH_SIGNING_SECRET and OAUTH_ADMIN_PASSWORD) or MCP_STATIC_TOKEN.",
     );
+  }
+
+  if (parsed.WHATSAPP_MCP_TOKEN && parsed.MCP_STATIC_TOKEN && parsed.WHATSAPP_MCP_TOKEN === parsed.MCP_STATIC_TOKEN) {
+    throw new Error("WHATSAPP_MCP_TOKEN must be distinct from MCP_STATIC_TOKEN.");
   }
 
   if (Boolean(parsed.BROWSER_QA_BASE_URL) !== Boolean(parsed.BROWSER_QA_TOKEN)) {
@@ -94,6 +101,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     ...(parsed.OAUTH_SIGNING_SECRET ? { oauthSigningSecret: parsed.OAUTH_SIGNING_SECRET } : {}),
     ...(parsed.OAUTH_ADMIN_PASSWORD ? { oauthAdminPassword: parsed.OAUTH_ADMIN_PASSWORD } : {}),
     ...(parsed.MCP_STATIC_TOKEN ? { staticToken: parsed.MCP_STATIC_TOKEN } : {}),
+    ...(parsed.WHATSAPP_MCP_TOKEN ? { whatsappMcpToken: parsed.WHATSAPP_MCP_TOKEN } : {}),
     ...(parsed.BROWSER_QA_BASE_URL
       ? { browserQaBaseUrl: withoutTrailingSlash(parsed.BROWSER_QA_BASE_URL) }
       : {}),
@@ -117,6 +125,7 @@ export function redactConfig(config: AppConfig): Record<string, unknown> {
     wordpressUsername: config.wordpressUsername,
     oauthEnabled: Boolean(config.oauthSigningSecret && config.oauthAdminPassword),
     staticTokenEnabled: Boolean(config.staticToken),
+    whatsappMcpTokenEnabled: Boolean(config.whatsappMcpToken),
     browserQaEnabled: Boolean(config.browserQaBaseUrl && config.browserQaToken),
     ...(config.browserQaBaseUrl ? { browserQaBaseUrl: config.browserQaBaseUrl } : {}),
     browserQaTimeoutMs: config.browserQaTimeoutMs,
