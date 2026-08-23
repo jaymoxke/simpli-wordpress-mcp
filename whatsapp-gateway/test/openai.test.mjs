@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {groundingRequirement,requiresLiveProductTruth,runAdvisor,validateGrounding,normalizeMcpOutput,AI_CONFIGURATION_ID} from '../src/openai.mjs';
+import {groundingRequirement,requiresLiveProductTruth,runAdvisor,validateGrounding,deriveEvidenceState,normalizeMcpOutput,AI_CONFIGURATION_ID} from '../src/openai.mjs';
 
 const BASE_PACKET={
   primary_intent:'PRICE_AVAILABILITY',advisor_action:'ANSWER_DIRECT',specialist_route:'PRODUCT_INTELLIGENCE',control_state:'NONE',
@@ -55,6 +55,7 @@ test('price question forces the safe MCP facade and stays stateless at OpenAI',a
     assert.equal(result.toolCalls[0].name,'simpli_whatsapp_read');
     assert.equal(result.toolCalls[0].output.operation,'PRODUCT_SEARCH');
     assert.equal(result.toolCalls[0].labeled_output,true);
+    assert.equal(result.packet.evidence_state,'CURRENT_COMMERCE_VERIFIED');
   }finally{globalThis.fetch=original;}
 });
 
@@ -74,7 +75,7 @@ test('grounded question fails closed when MCP returns an error',async()=>{
 
 test('exact product detail can answer only after admitted PRODUCT_GET',async()=>{
   const original=globalThis.fetch;
-  const p=packet({primary_intent:'PRODUCT_INFO',evidence_state:'GOLDEN_PRODUCT_VERIFIED',response_text:'Use it as the final morning step.'});
+  const p=packet({primary_intent:'PRODUCT_INFO',evidence_state:'PARTIAL',response_text:'Use it as the final morning step.'});
   globalThis.fetch=async()=>mockResponse([mcp('PRODUCT_SEARCH'),productGet()],p);
   try{const result=await runAdvisor({apiKey:'test-key',mcpUrl:'https://example.test/mcp',mcpToken:'test-token',messages:[{direction:'INBOUND',body:'How to use this sunscreen?'}],conversationId:'conv-detail'});assert.equal(result.packet.evidence_state,'GOLDEN_PRODUCT_VERIFIED');assert.equal(result.toolCalls[1].output.product_intelligence.admission.all_passed,true);}finally{globalThis.fetch=original;}
 });
@@ -94,19 +95,25 @@ test('comparison cannot declare an answer from only one admitted exact product',
   assert.throws(()=>validateGrounding({requirement:{required:true,kind:'PRODUCT_COMPARE'},toolCalls:[{name:'simpli_whatsapp_read',server_label:'simpli',error:null,output:{operation:'PRODUCT_GET',product_intelligence:GOLDEN_INTELLIGENCE}},{name:'simpli_whatsapp_read',server_label:'simpli',error:null,output:{operation:'PRODUCT_GET',product_intelligence:REVIEW_INTELLIGENCE}}],packet:p}),/PRODUCT_COMPARE_EVIDENCE_INSUFFICIENT/);
 });
 
-test('comparison with both admitted exact products is accepted',()=>{
-  const p=packet({primary_intent:'PRODUCT_COMPARISON',evidence_state:'GOLDEN_PRODUCT_VERIFIED',response_text:'A is lighter; B is richer.'});
-  assert.equal(validateGrounding({requirement:{required:true,kind:'PRODUCT_COMPARE'},toolCalls:[{name:'simpli_whatsapp_read',server_label:'simpli',error:null,output:{operation:'PRODUCT_GET',product_intelligence:GOLDEN_INTELLIGENCE}},{name:'simpli_whatsapp_read',server_label:'simpli',error:null,output:{operation:'PRODUCT_GET',product_intelligence:GOLDEN_INTELLIGENCE}}],packet:p}),true);
+test('comparison with both admitted exact products is accepted and derives Golden evidence',()=>{
+  const p=packet({primary_intent:'PRODUCT_COMPARISON',evidence_state:'PARTIAL',response_text:'A is lighter; B is richer.'});
+  const toolCalls=[{name:'simpli_whatsapp_read',server_label:'simpli',error:null,output:{operation:'PRODUCT_GET',product_intelligence:GOLDEN_INTELLIGENCE}},{name:'simpli_whatsapp_read',server_label:'simpli',error:null,output:{operation:'PRODUCT_GET',product_intelligence:GOLDEN_INTELLIGENCE}}];
+  assert.equal(deriveEvidenceState({requirement:{required:true,kind:'PRODUCT_COMPARE'},toolCalls,packet:p}),'GOLDEN_PRODUCT_VERIFIED');
+  assert.equal(validateGrounding({requirement:{required:true,kind:'PRODUCT_COMPARE'},toolCalls,packet:p}),true);
 });
 
-test('semantic direct answer must label its evidence as Golden',()=>{
+test('semantic evidence state is derived from server-proven Golden output rather than model self-label',()=>{
   const p=packet({primary_intent:'PRODUCT_INFO',evidence_state:'PARTIAL',response_text:'Use it once daily.'});
-  assert.throws(()=>validateGrounding({requirement:{required:true,kind:'PRODUCT_DETAIL'},toolCalls:[{name:'simpli_whatsapp_read',server_label:'simpli',error:null,output:{operation:'PRODUCT_GET',product_intelligence:GOLDEN_INTELLIGENCE}}],packet:p}),/SEMANTIC_ANSWER_REQUIRES_GOLDEN_EVIDENCE_STATE/);
+  const toolCalls=[{name:'simpli_whatsapp_read',server_label:'simpli',error:null,output:{operation:'PRODUCT_GET',product_intelligence:GOLDEN_INTELLIGENCE}}];
+  assert.equal(deriveEvidenceState({requirement:{required:true,kind:'PRODUCT_DETAIL'},toolCalls,packet:p}),'GOLDEN_PRODUCT_VERIFIED');
+  assert.equal(validateGrounding({requirement:{required:true,kind:'PRODUCT_DETAIL'},toolCalls,packet:p}),true);
 });
 
 test('broad recommendation requires admitted Golden candidate evidence before ADD',()=>{
-  const p=packet({primary_intent:'ROUTINE_GUIDANCE',advisor_action:'ANSWER_DIRECT',specialist_route:'ASK_SIMPLI_ROUTINE_INTELLIGENCE',evidence_state:'GOLDEN_PRODUCT_VERIFIED',customer_decision:'ADD',response_text:'Add the verified option after your baseline is stable.'});
-  assert.equal(validateGrounding({requirement:{required:true,kind:'GOLDEN_RECOMMENDATION'},toolCalls:[{name:'simpli_whatsapp_read',server_label:'simpli',error:null,output:{operation:'GOLDEN_LIST',items:[{product_intelligence:GOLDEN_INTELLIGENCE}]}}],packet:p}),true);
+  const p=packet({primary_intent:'ROUTINE_GUIDANCE',advisor_action:'ANSWER_DIRECT',specialist_route:'ASK_SIMPLI_ROUTINE_INTELLIGENCE',evidence_state:'PARTIAL',customer_decision:'ADD',response_text:'Add the verified option after your baseline is stable.'});
+  const good=[{name:'simpli_whatsapp_read',server_label:'simpli',error:null,output:{operation:'GOLDEN_LIST',items:[{product_intelligence:GOLDEN_INTELLIGENCE}]}}];
+  assert.equal(deriveEvidenceState({requirement:{required:true,kind:'GOLDEN_RECOMMENDATION'},toolCalls:good,packet:p}),'GOLDEN_PRODUCT_VERIFIED');
+  assert.equal(validateGrounding({requirement:{required:true,kind:'GOLDEN_RECOMMENDATION'},toolCalls:good,packet:p}),true);
   assert.throws(()=>validateGrounding({requirement:{required:true,kind:'GOLDEN_RECOMMENDATION'},toolCalls:[{name:'simpli_whatsapp_read',server_label:'simpli',error:null,output:{operation:'GOLDEN_LIST',items:[{product_intelligence:REVIEW_INTELLIGENCE}]}}],packet:p}),/GOLDEN_RECOMMENDATION_EVIDENCE_INSUFFICIENT/);
 });
 
