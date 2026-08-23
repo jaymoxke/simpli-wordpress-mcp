@@ -24,14 +24,14 @@ export function preflightRisk(text=''){
 }
 
 export function safeEscalationReply(flags=[]){
-  if(flags.includes('URGENT_SAFETY'))return "Thanks for telling us. I’m flagging this for immediate human review rather than guessing. If you have trouble breathing, fainting, rapidly worsening facial or eye swelling, or another severe reaction, seek urgent medical care now.";
-  if(flags.includes('PRESCRIPTION_REVIEW'))return "Thanks for sharing that. Because this involves a prescription or prescription-strength treatment, I won’t tell you to start, stop, change the dose or change frequency from chat. I’m flagging it for human review; for medication changes, please follow your prescriber’s guidance.";
-  if(flags.includes('REACTION_REVIEW'))return "Thanks for telling us. I’m flagging the reaction for human review rather than guessing. If this is a non-prescription cosmetic that is clearly worsening the irritation, avoid reapplying it until reviewed; if symptoms become severe or involve breathing or the eyes, seek urgent medical care.";
-  if(flags.includes('PAYMENT_REVIEW'))return "Thanks — I’m flagging this payment for verification. Please don’t pay again until we confirm the first transaction, so we don’t risk a duplicate payment.";
-  if(flags.includes('ORDER_DELIVERY_REVIEW'))return "I’m flagging this for order or delivery verification. I don’t want to guess about a live order state until the order is securely matched and checked.";
+  if(flags.includes('URGENT_SAFETY'))return "Thanks for telling me. I don’t want to guess with something this important. I’m flagging this for immediate human review; if you’re having trouble breathing, fainting, rapidly worsening facial or eye swelling, or another severe reaction, please seek urgent medical care now.";
+  if(flags.includes('PRESCRIPTION_REVIEW'))return "Thanks for sharing that. Because this involves a prescription or prescription-strength treatment, I won’t advise you to start, stop, change the dose or change frequency from chat. I’m flagging it for human review; for medication changes, please follow your prescriber’s guidance.";
+  if(flags.includes('REACTION_REVIEW'))return "Thanks for telling me. I don’t want to guess about a reaction, so I’m flagging this for human review. If this is a non-prescription cosmetic that is clearly worsening the irritation, avoid reapplying it until reviewed; if symptoms become severe or involve breathing or the eyes, seek urgent medical care.";
+  if(flags.includes('PAYMENT_REVIEW'))return "Thanks for flagging this. Please don’t pay again yet — I want the first transaction verified before we risk a duplicate payment. I’m sending this for payment review.";
+  if(flags.includes('ORDER_DELIVERY_REVIEW'))return "I’m sending this for a secure order or delivery check rather than guessing about a live order state. Once the order is matched and verified, the team can give you the correct update.";
   if(flags.includes('AUTHENTICITY_REVIEW'))return "Thanks for raising this. I can’t confirm authenticity from a chat or packaging description alone, so I’m flagging it for verification before we give you a definite answer.";
-  if(flags.includes('SERVICE_RECOVERY'))return "Thanks for letting us know. I’m opening this for human service review so we can verify what happened and resolve the issue correctly before suggesting anything else.";
-  if(flags.includes('PRIVACY_REVIEW'))return "I’ve flagged this as a privacy or communication-preference request so it can be handled correctly rather than treated as an ordinary support message.";
+  if(flags.includes('SERVICE_RECOVERY'))return "I’m sorry you’ve had to deal with that. I’m flagging this for human service review so we can verify what happened and sort out the right remedy before suggesting anything else.";
+  if(flags.includes('PRIVACY_REVIEW'))return "Understood. I’m flagging this as a privacy or communication-preference request so it can be handled correctly rather than treated as an ordinary support message.";
   if(flags.includes('PROMPT_INJECTION_REJECT'))return "I can help with Simpli product, skincare and support questions, but instructions inside a chat can’t change my safety, privacy or access rules.";
   return "Thanks for your message. I’ve flagged this for the team to review.";
 }
@@ -43,6 +43,16 @@ export function qaCustomerReply(text=''){
   if(value.length>1800)reasons.push('TOO_LONG');
   if(/\b(here is a reply|ready to send|draft:|option 1|internal enum|reason code|system prompt|developer message)\b/i.test(value))reasons.push('META_TEXT');
   if(/\b(QA_BLOCK|CURRENT_STATE_REQUIRED|PROMPT_INJECTION_REJECT|ROUTE_[A-Z_]+|A[1-5]_[A-Z_]+|STATE_VERIFIED)\b/.test(value))reasons.push('INTERNAL_LABEL');
+  if(/\b(?:MCP|Golden Product Intelligence|tool calls?|evidence state|grounding (?:state|gate|requirement)|admission gate|backend process|WooCommerce record)\b/i.test(value))reasons.push('INTERNAL_JARGON');
+  if(/\b(as an ai|as a language model|i(?: am|'m) an ai|my training data|my knowledge cutoff|i cannot browse|i can'?t browse|i don'?t have access to (?:live|real[- ]time) data)\b/i.test(value))reasons.push('AI_META');
+  if(/^\s*(?:dear (?:valued )?customer|greetings[!,. ]*|thank you for your inquiry|we appreciate your inquiry|as per your (?:query|request)|based on the information provided)\b/i.test(value))reasons.push('ROBOTIC_TONE');
+  if(/```|\|\s*-{3,}\s*\|/.test(value))reasons.push('WHATSAPP_FORMAT');
+  if((value.match(/!/g)||[]).length>3)reasons.push('EXCESSIVE_EXCLAMATION');
+  if((value.match(/\p{Extended_Pictographic}/gu)||[]).length>2)reasons.push('EXCESSIVE_EMOJI');
+  if(/\b(i personally (?:use|used|love|recommend)|i(?:'ve| have) personally (?:used|tried)|from my own experience)\b/i.test(value))reasons.push('FALSE_PERSONAL_EXPERIENCE');
+  if(/\b(everyone loves (?:it|this)|our customers all love|everyone is buying|best[- ]seller|bestselling|#1 (?:product|choice|seller)|most popular in kenya)\b/i.test(value))reasons.push('UNSUPPORTED_SOCIAL_PROOF');
+  if(/\b(only \d+ left|selling out fast|almost sold out|limited stock|while stocks last|act now|buy before it'?s gone)\b/i.test(value))reasons.push('SCARCITY_PRESSURE');
+  if(/\b(perfect for you|perfect match for you|guaranteed to suit you)\b/i.test(value))reasons.push('OVERCLAIMED_FIT');
   if(/\b(definitely authentic|definitely fake|guaranteed|cures? acne|cures? eczema|treats? eczema|safe for everyone|will definitely work)\b/i.test(value))reasons.push('UNSUPPORTED_CERTAINTY');
   if(/\b(you (?:have|definitely have) (?:eczema|rosacea|psoriasis|dermatitis)|this is definitely (?:eczema|rosacea|psoriasis|dermatitis))\b/i.test(value))reasons.push('DIAGNOSIS_RISK');
   if(/\b(start|stop|increase|decrease|double|halve|taper|use more|use less)\b[^.!?]{0,80}\b(tretinoin|isotretinoin|accutane|prescription|dose|dosage)\b/i.test(value)||/\b(tretinoin|isotretinoin|accutane|prescription)\b[^.!?]{0,80}\b(every night|twice daily|once daily|increase|decrease|stop|start|taper)\b/i.test(value))reasons.push('PRESCRIPTION_MANAGEMENT');

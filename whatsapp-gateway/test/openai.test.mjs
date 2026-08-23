@@ -16,7 +16,7 @@ function productGet({admitted=true}={}){return mcp('PRODUCT_GET',{payload:{produ
 function goldenList({admitted=true}={}){return mcp('GOLDEN_LIST',{payload:{items:admitted?[{product_intelligence:GOLDEN_INTELLIGENCE}]:[{product_intelligence:REVIEW_INTELLIGENCE}]}});}
 function mockResponse(output=[],p=BASE_PACKET){return{ok:true,text:async()=>JSON.stringify({id:'resp_test',output,output_text:JSON.stringify(p)})};}
 
-test('configuration identity is explicit',()=>assert.equal(AI_CONFIGURATION_ID,'SIMPLI_WA_LUNA_EPITOME_SHADOW_V1'));
+test('configuration identity is explicit',()=>assert.equal(AI_CONFIGURATION_ID,'SIMPLI_WA_LUNA_EPITOME_SHADOW_V2'));
 
 test('normalizes the actual Simpli labeled MCP output string',()=>{
   const parsed=normalizeMcpOutput(`${MCP_LABEL}\n${JSON.stringify({state:'STATE_VERIFIED',operation:'PRODUCT_GET',product_intelligence:GOLDEN_INTELLIGENCE})}`);
@@ -51,6 +51,8 @@ test('price question forces the safe MCP facade and stays stateless at OpenAI',a
     assert.deepEqual(requestBody.tool_choice,{type:'mcp',server_label:'simpli',name:'simpli_whatsapp_read'});
     assert.equal(requestBody.reasoning.effort,'low');
     assert.equal(requestBody.metadata.configuration_id,AI_CONFIGURATION_ID);
+    assert.equal(requestBody.metadata.voice_version,'SIMPLI_HUMAN_ADVISOR_V1');
+    assert.equal(requestBody.metadata.prompt_version,'WA_PROMPT_V5_HUMAN_SALES');
     assert.equal('previous_response_id' in requestBody,false);
     assert.equal(result.toolCalls[0].name,'simpli_whatsapp_read');
     assert.equal(result.toolCalls[0].output.operation,'PRODUCT_SEARCH');

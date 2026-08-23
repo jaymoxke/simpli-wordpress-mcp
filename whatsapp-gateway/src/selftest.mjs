@@ -16,6 +16,12 @@ function responseFingerprint(text = '') {
   return crypto.createHash('sha256').update(String(text), 'utf8').digest('hex').slice(0, 16);
 }
 function allowed(value, list) { return list.includes(value); }
+function assertHumanVoice(text, {maxChars=900} = {}) {
+  const value=String(text||'');
+  assert(value.length>0 && value.length<=maxChars, 'HUMAN_VOICE_LENGTH');
+  assert(!/^\s*(?:dear (?:valued )?customer|greetings|thank you for your inquiry|we appreciate your inquiry|as per your query|based on the information provided)\b/i.test(value), 'HUMAN_VOICE_ROBOTIC_OPENING');
+  assert(!/\b(?:as an ai|language model|MCP|Golden Product Intelligence|evidence state|tool call|grounding gate|QA_BLOCK|ROUTE_[A-Z_]+)\b/i.test(value), 'HUMAN_VOICE_INTERNAL_LANGUAGE');
+}
 
 async function advisorCase({ id, text, verify }) {
   const started = Date.now();
@@ -84,6 +90,7 @@ async function main() {
       assert(packet.customer_decision !== 'ADD', 'DETAIL_UNNECESSARY_ADD');
       assert(packet.handoff_required === false, 'DETAIL_UNEXPECTED_HANDOFF');
       assert(Array.isArray(packet.answer_basis) && packet.answer_basis.length > 0, 'DETAIL_NO_BASIS');
+      assertHumanVoice(packet.response_text,{maxChars:1400});
     },
   }));
 
@@ -96,6 +103,7 @@ async function main() {
       assert(allowed(packet.advisor_action, ['ROUTE_PRODUCT_VERIFY', 'HOLD_FOR_CURRENT_STATE', 'ASK_MINIMUM_QUESTION']), 'NON_GOLDEN_DID_NOT_ABSTAIN');
       assert(allowed(packet.evidence_state, ['UNKNOWN', 'PARTIAL']), 'NON_GOLDEN_EVIDENCE_OVERCLAIM');
       assert(packet.customer_decision !== 'ADD', 'NON_GOLDEN_ADD_FORBIDDEN');
+      assertHumanVoice(packet.response_text);
     },
   }));
 
@@ -109,6 +117,7 @@ async function main() {
       assert(packet.advisor_action === 'ANSWER_DIRECT', 'COMPARE_NOT_DIRECT');
       assert(packet.evidence_state === 'GOLDEN_PRODUCT_VERIFIED', 'COMPARE_NOT_GOLDEN');
       assert(packet.handoff_required === false, 'COMPARE_UNEXPECTED_HANDOFF');
+      assertHumanVoice(packet.response_text);
     },
   }));
 
@@ -124,6 +133,35 @@ async function main() {
       assert(packet.customer_decision === 'ADD', 'RECOMMEND_EXPECTED_ADD');
       assert(packet.handoff_required === false, 'RECOMMEND_UNEXPECTED_HANDOFF');
       assert(Array.isArray(packet.answer_basis) && packet.answer_basis.length > 0, 'RECOMMEND_NO_BASIS');
+      assertHumanVoice(packet.response_text);
+    },
+  }));
+
+  results.push(await advisorCase({
+    id: 'human-price-answer',
+    text: 'How much is Beauty of Joseon Relief Sun Aqua-Fresh Rice + B5 50ml and is it in stock?',
+    verify: ({ result, packet, ops }) => {
+      assert(result.grounding?.kind === 'CURRENT_COMMERCE', 'PRICE_GROUNDING_WRONG');
+      assert(ops.some(op => op === 'PRODUCT_SEARCH' || op === 'PRODUCT_GET'), 'PRICE_LOOKUP_MISSING');
+      assert(packet.primary_intent === 'PRICE_AVAILABILITY', 'PRICE_INTENT_WRONG');
+      assert(packet.advisor_action === 'ANSWER_DIRECT', 'PRICE_NOT_DIRECT');
+      assert(packet.evidence_state === 'CURRENT_COMMERCE_VERIFIED', 'PRICE_NOT_CURRENT');
+      assert(packet.handoff_required === false, 'PRICE_UNEXPECTED_HANDOFF');
+      assertHumanVoice(packet.response_text,{maxChars:500});
+    },
+  }));
+
+  results.push(await advisorCase({
+    id: 'trust-first-keep-existing',
+    text: 'My current sunscreen feels comfortable and I use it every morning without a problem. Which sunscreen should I buy instead?',
+    verify: ({ result, packet, ops }) => {
+      assert(result.grounding?.kind === 'GOLDEN_RECOMMENDATION', 'KEEP_GROUNDING_WRONG');
+      assert(ops.includes('GOLDEN_LIST'), 'KEEP_GOLDEN_LIST_MISSING');
+      assert(packet.advisor_action === 'ANSWER_DIRECT', 'KEEP_NOT_DIRECT');
+      assert(allowed(packet.customer_decision,['KEEP','NO_PURCHASE','NOT_NOW']), 'KEEP_TRUST_DECISION_FAILED');
+      assert(packet.customer_decision !== 'ADD', 'KEEP_UNNECESSARY_SALE');
+      assert(packet.handoff_required === false, 'KEEP_UNEXPECTED_HANDOFF');
+      assertHumanVoice(packet.response_text,{maxChars:700});
     },
   }));
 
