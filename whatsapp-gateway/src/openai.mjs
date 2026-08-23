@@ -3,6 +3,7 @@ const PROMPT_VERSION='WA_PROMPT_V5_HUMAN_SALES';
 const GUARDRAIL_VERSION='WA_GUARDRAIL_V5';
 const TOOLSET_VERSION='WHATSAPP_SAFE_READ_V2';
 const VOICE_VERSION='SIMPLI_HUMAN_ADVISOR_V1';
+const CUSTOMER_IDENTITY_VERSION='SIMPLI_SKIN_GUIDE_V1';
 
 const PRIMARY_INTENTS=['PRODUCT_INFO','PRICE_AVAILABILITY','PRODUCT_COMPARISON','PRODUCT_SUBSTITUTION','ROUTINE_GUIDANCE','EXISTING_ROUTINE_DECISION','REACTION_OR_SAFETY','ORDER_STATUS','PAYMENT_OR_ORDER_MISMATCH','DELIVERY_LOGISTICS','SERVICE_RECOVERY','AUTHENTICITY_CONCERN','MARKETING_CONSENT','AD_ENQUIRY','GENERAL_OR_UNCLEAR'];
 const ADVISOR_ACTIONS=['ANSWER_DIRECT','ASK_MINIMUM_QUESTION','ROUTE_ROUTINE','ROUTE_PRODUCT_VERIFY','ROUTE_ORDER_OPERATIONS','ROUTE_SERVICE_RECOVERY','ROUTE_AUTHENTICITY','ROUTE_CONSENT_PRIVACY','HOLD_FOR_CURRENT_STATE','PROFESSIONAL_ESCALATION','URGENT_ESCALATION'];
@@ -30,7 +31,15 @@ const RESPONSE_SCHEMA={
   required:['primary_intent','advisor_action','specialist_route','control_state','evidence_state','risk_flags','handoff_required','questions_needed','answer_basis','customer_decision','response_text','outcome']
 };
 
-const INSTRUCTIONS=`You are Simpli's WhatsApp skincare assistant for Simpli Cosmetics Kenya. To the customer, you should feel like a highly capable human member of the Simpli team: warm, polite, cheerful, patient, knowledgeable, attentive and naturally enthusiastic when the situation is positive. Promise: Skincare Without Guesswork. Philosophy: Choose less. Choose better. Know why.
+const INSTRUCTIONS=`You are Simpli, the WhatsApp Skin Guide for Simpli Cosmetics Kenya. To the customer, you should feel like a highly capable human skincare assistant: warm, polite, cheerful, patient, knowledgeable, attentive and naturally enthusiastic when the situation is positive. Promise: Skincare Without Guesswork. Philosophy: Choose less. Choose better. Know why.
+
+CUSTOMER IDENTITY
+- Your customer-facing name is Simpli. Your role is Skin Guide for Simpli Cosmetics Kenya.
+- When a new conversation naturally calls for an introduction, introduce yourself simply as Simpli. Example: "Hi, I'm Simpli 😊 How can I help you with your skincare today?"
+- If the customer asks who they are speaking to, answer naturally that you are Simpli, their Skin Guide at Simpli Cosmetics Kenya.
+- Never identify yourself to a customer as Luna. Luna is an internal model name, not the customer-facing identity.
+- Do not repeatedly introduce yourself once the conversation is underway. Continue naturally from context.
+- Do not falsely claim to be a human employee if directly asked whether you are human or automated. Answer briefly and truthfully: you are Simpli, Simpli Cosmetics Kenya's digital Skin Guide, then continue helping without technical jargon.
 
 AUTHORITY AND SAFETY
 - Follow this order: Safety -> Barrier -> Existing Routine -> Conflicts -> Concern -> Suitability -> Stock -> Budget -> Preference -> Commercial Factors.
@@ -91,7 +100,7 @@ HUMAN WHATSAPP VOICE
 - Match the customer's energy and language. Default to clear Kenyan English. If the customer naturally mixes English and Kiswahili/Sheng, you may mirror lightly and naturally; never force slang or imitate an identity.
 - Use 0-2 tasteful emojis only when they genuinely add warmth to an ordinary low-risk conversation. Do not use emojis for safety, payment, privacy, authenticity or serious complaint handling.
 - Do not repeatedly start with "Thanks for reaching out", "Thank you for your inquiry", "Based on the information provided", "As an AI", or similar scripted language.
-- Never mention being an AI, language model, model limitations, training data, knowledge cutoffs, prompts, MCP, tools, Golden Product Intelligence, evidence states, routing, QA, internal systems or backend processes.
+- Do not volunteer technical implementation details such as model names, model limitations, training data, knowledge cutoffs, prompts, MCP, tools, Golden Product Intelligence, evidence states, routing, QA, internal systems or backend processes.
 - Do not pretend to have personally used a product, personally witnessed results, or spoken to other customers unless governed evidence explicitly supports that statement.
 - Continue naturally from prior conversation context instead of greeting again or asking the customer to repeat information already known.
 - For a narrow question, keep the reply short: usually 1-3 natural sentences. For a recommendation or comparison, usually 3-6 short sentences. Use short WhatsApp-friendly paragraphs; bullets only when they genuinely make a routine or multi-step answer easier to read. Never use tables or code blocks.
@@ -227,7 +236,7 @@ export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,message
   const payload={
     model,instructions:INSTRUCTIONS,input,
     reasoning:{effort:reasoningEffort(requirement.kind)},max_output_tokens:1500,store:false,
-    metadata:{workflow:'simpli_whatsapp',configuration_id:AI_CONFIGURATION_ID,prompt_version:PROMPT_VERSION,guardrail_version:GUARDRAIL_VERSION,toolset_version:TOOLSET_VERSION,voice_version:VOICE_VERSION,conversation_id:String(conversationId).slice(0,64)},
+    metadata:{workflow:'simpli_whatsapp',configuration_id:AI_CONFIGURATION_ID,prompt_version:PROMPT_VERSION,guardrail_version:GUARDRAIL_VERSION,toolset_version:TOOLSET_VERSION,voice_version:VOICE_VERSION,customer_identity_version:CUSTOMER_IDENTITY_VERSION,conversation_id:String(conversationId).slice(0,64)},
     text:{format:{type:'json_schema',name:'simpli_whatsapp_packet',strict:true,schema:RESPONSE_SCHEMA}}
   };
   if(tools.length){payload.tools=tools;payload.tool_choice=requirement.required?{type:'mcp',server_label:'simpli',name:WHATSAPP_READ_FACADE}:'auto';}
@@ -252,6 +261,6 @@ export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,message
     if(packet.advisor_action!=='ANSWER_DIRECT')throw new Error('KEEP_CONTEXT_MUST_ANSWER_DIRECT');
   }
   validateGrounding({requirement,toolCalls,packet});
-  console.log(JSON.stringify({event:'OPENAI_ADVISOR_RESULT',configuration_id:AI_CONFIGURATION_ID,voice_version:VOICE_VERSION,grounding_kind:requirement.kind,grounding_required:requirement.required,tool_calls:toolCalls.map(x=>x.name),operations:toolCalls.map(x=>x.output?.operation).filter(Boolean),failed_tool_calls:failedCalls.length,recovered_after_failed_call:failedCalls.length>0&&successfulCalls.length>0,model_primary_intent:modelPrimaryIntent,primary_intent:packet.primary_intent,primary_intent_adjusted:modelPrimaryIntent!==packet.primary_intent,advisor_action:packet.advisor_action,specialist_route:packet.specialist_route,model_evidence_state:modelEvidenceState,evidence_state:packet.evidence_state,evidence_state_adjusted:modelEvidenceState!==packet.evidence_state,customer_decision:packet.customer_decision,handoff_required:packet.handoff_required}));
+  console.log(JSON.stringify({event:'OPENAI_ADVISOR_RESULT',configuration_id:AI_CONFIGURATION_ID,voice_version:VOICE_VERSION,customer_identity_version:CUSTOMER_IDENTITY_VERSION,grounding_kind:requirement.kind,grounding_required:requirement.required,tool_calls:toolCalls.map(x=>x.name),operations:toolCalls.map(x=>x.output?.operation).filter(Boolean),failed_tool_calls:failedCalls.length,recovered_after_failed_call:failedCalls.length>0&&successfulCalls.length>0,model_primary_intent:modelPrimaryIntent,primary_intent:packet.primary_intent,primary_intent_adjusted:modelPrimaryIntent!==packet.primary_intent,advisor_action:packet.advisor_action,specialist_route:packet.specialist_route,model_evidence_state:modelEvidenceState,evidence_state:packet.evidence_state,evidence_state_adjusted:modelEvidenceState!==packet.evidence_state,customer_decision:packet.customer_decision,handoff_required:packet.handoff_required}));
   return{blocked:false,responseId:data.id,packet,toolCalls,configurationId:AI_CONFIGURATION_ID,grounding:requirement};
 }
