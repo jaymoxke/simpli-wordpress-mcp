@@ -35,7 +35,7 @@ const INSTRUCTIONS=`You are Simpli, the WhatsApp Skin Guide for Simpli Cosmetics
 
 CUSTOMER IDENTITY
 - Your customer-facing name is Simpli. Your role is Skin Guide for Simpli Cosmetics Kenya.
-- When a new conversation naturally calls for an introduction, introduce yourself simply as Simpli. Example: "Hi, I'm Simpli 😊 How can I help you with your skincare today?"
+- ALWAYS introduce yourself by name on the first customer-facing reply of every new conversation. Start naturally with a brief phrase such as "Hi, I'm Simpli 😊" before answering the customer's question. Do this even when the customer's first message goes straight into a skincare or shopping question.
 - If the customer asks who they are speaking to, answer naturally that you are Simpli, their Skin Guide at Simpli Cosmetics Kenya.
 - Never identify yourself to a customer as Luna. Luna is an internal model name, not the customer-facing identity.
 - Do not repeatedly introduce yourself once the conversation is underway. Continue naturally from context.
@@ -118,7 +118,7 @@ GREAT MARKETER BEHAVIOR
 - Do not push a premium or in-stock product merely because it is commercially attractive. Suitability remains ahead of commerce.
 
 CUSTOMER RESPONSE SHAPE
-- Lead with the answer, not a preamble.
+- Lead with the answer after the required first-conversation name introduction; do not add a long preamble.
 - Then give the most useful reason or trade-off in plain language.
 - End with one natural next step only when it helps the customer move forward; do not mechanically end every reply with a question.
 - If you need more context, ask one decision-changing question at a time and briefly say why it matters in customer language.
@@ -139,6 +139,7 @@ const KEEP_CATEGORY_RULES=[
   {adequate:new RegExp(`\\bmy (?:current )?cleanser\\b[\\s\\S]{0,180}\\b${ADEQUATE_BASELINE_SIGNAL}\\b`,'i'),shopping:/\b(?:which|what) cleanser should i (?:buy|use)(?: instead)?\b|\b(?:replace|swap)[^.!?]{0,60}\bcleanser\b/i}
 ];
 const EXPLICIT_REPLACEMENT_NEED=/\b(?:too heavy|too greasy|white cast|stings?|burns?|irritat(?:es|ing|ed)?|break(?:s|ing)? me out|too expensive|out of stock|ran out|finished|dislike|don'?t like|want (?:a )?(?:lighter|cheaper|richer|more matte|dewier|fragrance[- ]free))\b/i;
+const SIMPLI_INTRO=/\b(?:i['’]?m|i am)\s+simpli\b/i;
 
 export function requiresLiveProductTruth(text=''){return CURRENT_COMMERCE.test(String(text||''));}
 export function existingRoutineKeepCandidate(text=''){
@@ -156,6 +157,12 @@ export function groundingRequirement(text=''){
   return{required:false,kind:'NONE'};
 }
 function latestInboundText(messages=[]){for(let i=messages.length-1;i>=0;i--){const m=messages[i];if(m?.direction==='INBOUND'&&typeof m.body==='string')return m.body;}return'';}
+function isFirstAdvisorReply(messages=[]){return !messages.some(m=>m?.direction==='OUTBOUND');}
+function ensureFirstReplyIdentity(text,messages=[]){
+  const value=String(text||'').trim();
+  if(!isFirstAdvisorReply(messages)||SIMPLI_INTRO.test(value))return value;
+  return `Hi, I'm Simpli. ${value}`.trim();
+}
 function parseJsonObject(text){
   if(typeof text!=='string'||!text.trim())return null;
   try{const parsed=JSON.parse(text);return typeof parsed==='object'&&parsed!==null&&!Array.isArray(parsed)?parsed:null;}catch{return null;}
@@ -261,6 +268,7 @@ export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,message
     if(packet.advisor_action!=='ANSWER_DIRECT')throw new Error('KEEP_CONTEXT_MUST_ANSWER_DIRECT');
   }
   validateGrounding({requirement,toolCalls,packet});
+  packet={...packet,response_text:ensureFirstReplyIdentity(packet.response_text,messages)};
   console.log(JSON.stringify({event:'OPENAI_ADVISOR_RESULT',configuration_id:AI_CONFIGURATION_ID,voice_version:VOICE_VERSION,customer_identity_version:CUSTOMER_IDENTITY_VERSION,grounding_kind:requirement.kind,grounding_required:requirement.required,tool_calls:toolCalls.map(x=>x.name),operations:toolCalls.map(x=>x.output?.operation).filter(Boolean),failed_tool_calls:failedCalls.length,recovered_after_failed_call:failedCalls.length>0&&successfulCalls.length>0,model_primary_intent:modelPrimaryIntent,primary_intent:packet.primary_intent,primary_intent_adjusted:modelPrimaryIntent!==packet.primary_intent,advisor_action:packet.advisor_action,specialist_route:packet.specialist_route,model_evidence_state:modelEvidenceState,evidence_state:packet.evidence_state,evidence_state_adjusted:modelEvidenceState!==packet.evidence_state,customer_decision:packet.customer_decision,handoff_required:packet.handoff_required}));
   return{blocked:false,responseId:data.id,packet,toolCalls,configurationId:AI_CONFIGURATION_ID,grounding:requirement};
 }
