@@ -46,6 +46,7 @@ TRUTH CONTRACT
 - For exact product questions: resolve identity with PRODUCT_SEARCH when needed, then use PRODUCT_GET before making semantic claims.
 - For comparisons: ground every named product. If one side cannot be verified, say what is verified and what remains unknown; do not manufacture a winner.
 - For broad product recommendations or a routine that would name new products: use GOLDEN_LIST as the candidate universe. A catalogue/search match is not evidence of suitability. Name a new product only when Golden evidence and customer context support it.
+- Treat current stock as a later hard practical constraint after suitability. Never present an item whose stock_status is not instock as immediately purchasable. If it is the best fit but unavailable, say so and prefer NOT_NOW or a separately verified suitable alternative rather than pretending availability.
 - If customer context is insufficient, ask only the minimum question that could change the decision. Do not run a generic questionnaire.
 - General Start-Safe education may use the stable Simpli method: cleanser + moisturiser + sunscreen first, one primary concern, introduce changes gradually, observe tolerance, then adjust. Do not turn generic education into an exact-product claim.
 
@@ -90,7 +91,10 @@ function completedMcpCalls(data){
   return (data.output||[]).filter(x=>x?.type==='mcp_call').map(x=>({name:x.name,server_label:x.server_label,status:x.status,error:x.error||null,output:parseMcpOutput(x.output)}));
 }
 function successfulFacadeCalls(toolCalls){return toolCalls.filter(x=>x.name===WHATSAPP_READ_FACADE&&x.server_label==='simpli'&&!x.error&&(!x.status||x.status==='completed'));}
-function operationCount(calls,operation){return calls.filter(x=>x.output?.operation===operation).length;}
+function admittedProductIntelligence(value){return value?.state==='STATE_VERIFIED'&&value?.admission?.all_passed===true;}
+function admittedProductGetCount(calls){return calls.filter(x=>x.output?.operation==='PRODUCT_GET'&&admittedProductIntelligence(x.output?.product_intelligence)).length;}
+function goldenListHasAdmitted(calls){return calls.some(x=>x.output?.operation==='GOLDEN_LIST'&&Array.isArray(x.output?.items)&&x.output.items.some(item=>admittedProductIntelligence(item?.product_intelligence)));}
+function hasAdmittedGoldenEvidence(calls){return admittedProductGetCount(calls)>0||goldenListHasAdmitted(calls);}
 function safeAbstention(packet){
   return ['ASK_MINIMUM_QUESTION','ROUTE_PRODUCT_VERIFY','ROUTE_ROUTINE','HOLD_FOR_CURRENT_STATE'].includes(packet?.advisor_action)
     && ['UNKNOWN','PARTIAL'].includes(packet?.evidence_state)
@@ -100,10 +104,12 @@ export function validateGrounding({requirement,toolCalls,packet}){
   if(!requirement?.required)return true;
   const calls=successfulFacadeCalls(toolCalls);
   if(calls.length===0)throw new Error('GROUNDED_TOOL_REQUIRED_BUT_NOT_USED');
-  if(requirement.kind==='PRODUCT_DETAIL'&&operationCount(calls,'PRODUCT_GET')<1&&!safeAbstention(packet))throw new Error('PRODUCT_DETAIL_EVIDENCE_INSUFFICIENT');
-  if(requirement.kind==='PRODUCT_COMPARE'&&operationCount(calls,'PRODUCT_GET')<2&&!safeAbstention(packet))throw new Error('PRODUCT_COMPARE_EVIDENCE_INSUFFICIENT');
-  if(requirement.kind==='GOLDEN_RECOMMENDATION'&&operationCount(calls,'GOLDEN_LIST')<1&&!safeAbstention(packet))throw new Error('GOLDEN_RECOMMENDATION_EVIDENCE_INSUFFICIENT');
-  if(packet?.customer_decision==='ADD'&&packet?.evidence_state!=='GOLDEN_PRODUCT_VERIFIED')throw new Error('ADD_REQUIRES_GOLDEN_PRODUCT_EVIDENCE');
+  const abstaining=safeAbstention(packet);
+  if(requirement.kind==='PRODUCT_DETAIL'&&admittedProductGetCount(calls)<1&&!abstaining)throw new Error('PRODUCT_DETAIL_EVIDENCE_INSUFFICIENT');
+  if(requirement.kind==='PRODUCT_COMPARE'&&admittedProductGetCount(calls)<2&&!abstaining)throw new Error('PRODUCT_COMPARE_EVIDENCE_INSUFFICIENT');
+  if(requirement.kind==='GOLDEN_RECOMMENDATION'&&!goldenListHasAdmitted(calls)&&!abstaining)throw new Error('GOLDEN_RECOMMENDATION_EVIDENCE_INSUFFICIENT');
+  if(['PRODUCT_DETAIL','PRODUCT_COMPARE','GOLDEN_RECOMMENDATION'].includes(requirement.kind)&&!abstaining&&packet?.evidence_state!=='GOLDEN_PRODUCT_VERIFIED')throw new Error('SEMANTIC_ANSWER_REQUIRES_GOLDEN_EVIDENCE_STATE');
+  if(packet?.customer_decision==='ADD'&&(packet?.evidence_state!=='GOLDEN_PRODUCT_VERIFIED'||!hasAdmittedGoldenEvidence(calls)))throw new Error('ADD_REQUIRES_GOLDEN_PRODUCT_EVIDENCE');
   return true;
 }
 function reasoningEffort(kind){return ['PRODUCT_COMPARE','GOLDEN_RECOMMENDATION','PRODUCT_DETAIL'].includes(kind)?'medium':'low';}
