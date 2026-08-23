@@ -116,17 +116,28 @@ function safeAbstention(packet){
     && ['UNKNOWN','PARTIAL'].includes(packet?.evidence_state)
     && packet?.customer_decision!=='ADD';
 }
+export function deriveEvidenceState({requirement,toolCalls,packet}){
+  if(!requirement?.required)return packet?.evidence_state||'NOT_REQUIRED';
+  if(safeAbstention(packet)||packet?.handoff_required)return packet?.evidence_state||'UNKNOWN';
+  const calls=successfulFacadeCalls(toolCalls);
+  if(requirement.kind==='PRODUCT_DETAIL'&&admittedProductGetCount(calls)>=1)return'GOLDEN_PRODUCT_VERIFIED';
+  if(requirement.kind==='PRODUCT_COMPARE'&&admittedProductGetCount(calls)>=2)return'GOLDEN_PRODUCT_VERIFIED';
+  if(requirement.kind==='GOLDEN_RECOMMENDATION'&&goldenListHasAdmitted(calls))return'GOLDEN_PRODUCT_VERIFIED';
+  if(requirement.kind==='CURRENT_COMMERCE'&&calls.some(call=>['PRODUCT_SEARCH','PRODUCT_GET'].includes(call.output?.operation)))return'CURRENT_COMMERCE_VERIFIED';
+  return packet?.evidence_state||'UNKNOWN';
+}
 export function validateGrounding({requirement,toolCalls,packet}){
   if(!requirement?.required)return true;
   const calls=successfulFacadeCalls(toolCalls);
   if(calls.length===0)throw new Error('GROUNDED_TOOL_REQUIRED_BUT_NOT_USED');
   if(calls.some(call=>call.truncated_output))throw new Error('GROUNDED_TOOL_OUTPUT_TRUNCATED');
   const abstaining=safeAbstention(packet);
+  const evidenceState=deriveEvidenceState({requirement,toolCalls,packet});
   if(requirement.kind==='PRODUCT_DETAIL'&&admittedProductGetCount(calls)<1&&!abstaining)throw new Error('PRODUCT_DETAIL_EVIDENCE_INSUFFICIENT');
   if(requirement.kind==='PRODUCT_COMPARE'&&admittedProductGetCount(calls)<2&&!abstaining)throw new Error('PRODUCT_COMPARE_EVIDENCE_INSUFFICIENT');
   if(requirement.kind==='GOLDEN_RECOMMENDATION'&&!goldenListHasAdmitted(calls)&&!abstaining)throw new Error('GOLDEN_RECOMMENDATION_EVIDENCE_INSUFFICIENT');
-  if(['PRODUCT_DETAIL','PRODUCT_COMPARE','GOLDEN_RECOMMENDATION'].includes(requirement.kind)&&!abstaining&&packet?.evidence_state!=='GOLDEN_PRODUCT_VERIFIED')throw new Error('SEMANTIC_ANSWER_REQUIRES_GOLDEN_EVIDENCE_STATE');
-  if(packet?.customer_decision==='ADD'&&(packet?.evidence_state!=='GOLDEN_PRODUCT_VERIFIED'||!hasAdmittedGoldenEvidence(calls)))throw new Error('ADD_REQUIRES_GOLDEN_PRODUCT_EVIDENCE');
+  if(['PRODUCT_DETAIL','PRODUCT_COMPARE','GOLDEN_RECOMMENDATION'].includes(requirement.kind)&&!abstaining&&evidenceState!=='GOLDEN_PRODUCT_VERIFIED')throw new Error('SEMANTIC_ANSWER_REQUIRES_GOLDEN_EVIDENCE_STATE');
+  if(packet?.customer_decision==='ADD'&&(evidenceState!=='GOLDEN_PRODUCT_VERIFIED'||!hasAdmittedGoldenEvidence(calls)))throw new Error('ADD_REQUIRES_GOLDEN_PRODUCT_EVIDENCE');
   return true;
 }
 function reasoningEffort(kind){return ['PRODUCT_COMPARE','GOLDEN_RECOMMENDATION','PRODUCT_DETAIL'].includes(kind)?'medium':'low';}
@@ -146,7 +157,6 @@ export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,message
     metadata:{workflow:'simpli_whatsapp',configuration_id:AI_CONFIGURATION_ID,prompt_version:PROMPT_VERSION,guardrail_version:GUARDRAIL_VERSION,toolset_version:TOOLSET_VERSION,conversation_id:String(conversationId).slice(0,64)},
     text:{format:{type:'json_schema',name:'simpli_whatsapp_packet',strict:true,schema:RESPONSE_SCHEMA}}
   };
-  // Conversation history is replayed from Simpli's encrypted local transcript. Keep OpenAI stateless with store:false.
   void previousResponseId;
   const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{authorization:`Bearer ${apiKey}`,'content-type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(70000)}),raw=await r.text();
   if(!r.ok)throw new Error(`OpenAI response failed ${r.status}: ${raw.slice(0,800)}`);
@@ -157,8 +167,10 @@ export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,message
   for(const call of toolCalls){if(call.name===WHATSAPP_READ_FACADE&&call.error)throw new Error('GROUNDED_TOOL_FAILED');if(call.name===WHATSAPP_READ_FACADE&&call.status&&call.status!=='completed')throw new Error(`GROUNDED_TOOL_FAILED:${call.status}`);}
   const text=data.output_text||data.output?.flatMap(x=>x.content||[]).find(c=>c.type==='output_text')?.text;
   if(!text)throw new Error('OpenAI returned no output text');
-  const packet=JSON.parse(text);
+  const modelPacket=JSON.parse(text);
+  const modelEvidenceState=modelPacket.evidence_state;
+  const packet={...modelPacket,evidence_state:deriveEvidenceState({requirement,toolCalls,packet:modelPacket})};
   validateGrounding({requirement,toolCalls,packet});
-  console.log(JSON.stringify({event:'OPENAI_ADVISOR_RESULT',configuration_id:AI_CONFIGURATION_ID,grounding_kind:requirement.kind,grounding_required:requirement.required,tool_calls:toolCalls.map(x=>x.name),operations:toolCalls.map(x=>x.output?.operation).filter(Boolean),primary_intent:packet.primary_intent,advisor_action:packet.advisor_action,specialist_route:packet.specialist_route,evidence_state:packet.evidence_state,customer_decision:packet.customer_decision,handoff_required:packet.handoff_required}));
+  console.log(JSON.stringify({event:'OPENAI_ADVISOR_RESULT',configuration_id:AI_CONFIGURATION_ID,grounding_kind:requirement.kind,grounding_required:requirement.required,tool_calls:toolCalls.map(x=>x.name),operations:toolCalls.map(x=>x.output?.operation).filter(Boolean),primary_intent:packet.primary_intent,advisor_action:packet.advisor_action,specialist_route:packet.specialist_route,model_evidence_state:modelEvidenceState,evidence_state:packet.evidence_state,evidence_state_adjusted:modelEvidenceState!==packet.evidence_state,customer_decision:packet.customer_decision,handoff_required:packet.handoff_required}));
   return{blocked:false,responseId:data.id,packet,toolCalls,configurationId:AI_CONFIGURATION_ID,grounding:requirement};
 }
