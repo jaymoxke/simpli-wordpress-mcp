@@ -155,12 +155,13 @@ async function main() {
     id: 'trust-first-keep-existing',
     text: 'My current sunscreen feels comfortable and I use it every morning without a problem. Which sunscreen should I buy instead?',
     verify: ({ result, packet, ops }) => {
-      assert(result.grounding?.kind === 'GOLDEN_RECOMMENDATION', 'KEEP_GROUNDING_WRONG');
-      assert(ops.includes('GOLDEN_LIST'), 'KEEP_GOLDEN_LIST_MISSING');
+      assert(result.grounding?.kind === 'EXISTING_ROUTINE_KEEP', 'KEEP_GROUNDING_WRONG');
+      assert(packet.primary_intent === 'EXISTING_ROUTINE_DECISION', 'KEEP_INTENT_WRONG');
       assert(packet.advisor_action === 'ANSWER_DIRECT', 'KEEP_NOT_DIRECT');
       assert(allowed(packet.customer_decision,['KEEP','NO_PURCHASE','NOT_NOW']), 'KEEP_TRUST_DECISION_FAILED');
       assert(packet.customer_decision !== 'ADD', 'KEEP_UNNECESSARY_SALE');
       assert(packet.handoff_required === false, 'KEEP_UNEXPECTED_HANDOFF');
+      assert(!ops.includes('GOLDEN_LIST'), 'KEEP_UNNECESSARY_CATALOGUE_BROWSE');
       assertHumanVoice(packet.response_text,{maxChars:700});
     },
   }));
