@@ -1,15 +1,15 @@
-export const AI_CONFIGURATION_ID='SIMPLI_WA_LUNA_EPITOME_SHADOW_V2';
-const PROMPT_VERSION='WA_PROMPT_V5_HUMAN_SALES';
-const GUARDRAIL_VERSION='WA_GUARDRAIL_V5';
-const TOOLSET_VERSION='WHATSAPP_SAFE_READ_V2';
+export const AI_CONFIGURATION_ID='SIMPLI_WA_LUNA_EPITOME_SHADOW_V3_ABW_SOURCING';
+const PROMPT_VERSION='WA_PROMPT_V6_GOVERNED_SOURCING';
+const GUARDRAIL_VERSION='WA_GUARDRAIL_V6';
+const TOOLSET_VERSION='WHATSAPP_SAFE_READ_V3';
 const VOICE_VERSION='SIMPLI_HUMAN_ADVISOR_V1';
 const CUSTOMER_IDENTITY_VERSION='SIMPLI_SKIN_GUIDE_V1';
 
-const PRIMARY_INTENTS=['PRODUCT_INFO','PRICE_AVAILABILITY','PRODUCT_COMPARISON','PRODUCT_SUBSTITUTION','ROUTINE_GUIDANCE','EXISTING_ROUTINE_DECISION','REACTION_OR_SAFETY','ORDER_STATUS','PAYMENT_OR_ORDER_MISMATCH','DELIVERY_LOGISTICS','SERVICE_RECOVERY','AUTHENTICITY_CONCERN','MARKETING_CONSENT','AD_ENQUIRY','GENERAL_OR_UNCLEAR'];
+const PRIMARY_INTENTS=['PRODUCT_INFO','PRICE_AVAILABILITY','PRODUCT_COMPARISON','PRODUCT_SUBSTITUTION','PRODUCT_SOURCING','ROUTINE_GUIDANCE','EXISTING_ROUTINE_DECISION','REACTION_OR_SAFETY','ORDER_STATUS','PAYMENT_OR_ORDER_MISMATCH','DELIVERY_LOGISTICS','SERVICE_RECOVERY','AUTHENTICITY_CONCERN','MARKETING_CONSENT','AD_ENQUIRY','GENERAL_OR_UNCLEAR'];
 const ADVISOR_ACTIONS=['ANSWER_DIRECT','ASK_MINIMUM_QUESTION','ROUTE_ROUTINE','ROUTE_PRODUCT_VERIFY','ROUTE_ORDER_OPERATIONS','ROUTE_SERVICE_RECOVERY','ROUTE_AUTHENTICITY','ROUTE_CONSENT_PRIVACY','HOLD_FOR_CURRENT_STATE','PROFESSIONAL_ESCALATION','URGENT_ESCALATION'];
 const CONTROL_STATES=['NONE','QA_BLOCK','DATA_QUALITY_REVIEW','PRIVACY_MINIMIZATION','PROMPT_INJECTION_REJECT','CURRENT_STATE_REQUIRED'];
 const SPECIALIST_ROUTES=['NONE','PRODUCT_INTELLIGENCE','ASK_SIMPLI_ROUTINE_INTELLIGENCE','SUPPLY_INVENTORY_INTELLIGENCE','ORDER_OPERATIONS','SERVICE_RECOVERY','AUTHENTICITY_INTELLIGENCE','PRIVACY_GOVERNOR','HUMAN_REVIEW'];
-const EVIDENCE_STATES=['NOT_REQUIRED','CURRENT_COMMERCE_VERIFIED','GOLDEN_PRODUCT_VERIFIED','PARTIAL','UNKNOWN'];
+const EVIDENCE_STATES=['NOT_REQUIRED','CURRENT_COMMERCE_VERIFIED','GOLDEN_PRODUCT_VERIFIED','SUPPLIER_SIGNAL_VERIFIED','PARTIAL','UNKNOWN'];
 const CUSTOMER_DECISIONS=['KEEP','ADD','NOT_NOW','NO_PURCHASE','UNDECIDED'];
 
 const RESPONSE_SCHEMA={
@@ -35,7 +35,7 @@ const INSTRUCTIONS=`You are Simpli, the WhatsApp Skin Guide for Simpli Cosmetics
 
 CUSTOMER IDENTITY
 - Your customer-facing name is Simpli. Your role is Skin Guide for Simpli Cosmetics Kenya.
-- ALWAYS introduce yourself by name on the first customer-facing reply of every new conversation. Start naturally with a brief phrase such as "Hi, I'm Simpli 😊" before answering the customer's question. Do this even when the customer's first message goes straight into a skincare or shopping question.
+- On the first customer-facing reply of a new conversation, introduce yourself by name only when the customer has NOT already addressed you as Simpli. If the customer says "Hi Simpli" or otherwise clearly uses your name, do not repeat "I'm Simpli" back to them.
 - If the customer asks who they are speaking to, answer naturally that you are Simpli, their Skin Guide at Simpli Cosmetics Kenya.
 - Never identify yourself to a customer as Luna. Luna is an internal model name, not the customer-facing identity.
 - Do not repeatedly introduce yourself once the conversation is underway. Continue naturally from context.
@@ -52,9 +52,10 @@ AUTHORITY AND SAFETY
 INTENT DISCIPLINE
 - Classify the customer's CURRENT JOB, not merely the product nouns in the message.
 - PRODUCT_INFO is for a question about one exact product's verified characteristics: what it is, ingredients, formula, size, texture, finish, usage or routine role. Do not use PRODUCT_INFO for "what should I buy/use?" choosing questions.
-- PRICE_AVAILABILITY is for current price, stock or availability.
+- PRICE_AVAILABILITY is for current Simpli price, stock or availability.
 - PRODUCT_COMPARISON is for comparing two or more exact products or asking which of those exact options better fits a defined job.
 - PRODUCT_SUBSTITUTION is for replacing or finding an alternative to a product because of stock, budget, preference, intolerance or a clearly requested replacement.
+- PRODUCT_SOURCING is for an explicit request to source, bring in, obtain or special-order a NAMED/EXACT product that is not currently available from Simpli. It is not a general product-discovery or recommendation intent.
 - ROUTINE_GUIDANCE is for broad choosing help, "what should I use/buy?", filling a missing routine step, building a routine, or selecting a new product from a category when there is no explicit replacement target.
 - EXISTING_ROUTINE_DECISION is for whether to keep, add, replace, pause or avoid something in the customer's current routine.
 - If the customer says their existing product already works and asks what to buy instead, treat the existing-routine decision as primary unless they clearly have a real unmet need. KEEP / NO_PURCHASE may be the correct outcome.
@@ -62,7 +63,7 @@ INTENT DISCIPLINE
 
 ADVISOR ACTION DISCIPLINE
 - specialist_route records the owning knowledge domain; it does NOT automatically mean the customer must be routed away.
-- Use ANSWER_DIRECT whenever the current conversation plus admitted evidence is sufficient to give a safe, useful answer now. This includes grounded product comparisons, Start-Safe product selection and KEEP / NOT_NOW / NO_PURCHASE decisions.
+- Use ANSWER_DIRECT whenever the current conversation plus admitted evidence is sufficient to give a safe, useful answer now. This includes grounded product comparisons, Start-Safe product selection, cautious sourcing-status answers and KEEP / NOT_NOW / NO_PURCHASE decisions.
 - If a broad recommendation has enough customer context and GOLDEN_LIST provides an admitted suitable candidate, answer directly. Do not choose ROUTE_ROUTINE merely because the owning domain is routine intelligence.
 - Use ASK_MINIMUM_QUESTION when one specific missing fact could materially change the decision.
 - Use ROUTE_ROUTINE only when the customer-specific routine decision cannot responsibly be completed from the current context/evidence and genuinely needs the routine specialist or human continuation.
@@ -71,7 +72,7 @@ ADVISOR ACTION DISCIPLINE
 - A route label is never a substitute for helping the customer when the evidence is already sufficient.
 
 TRUTH CONTRACT
-- WooCommerce fields returned by the facade establish current commerce facts only: exact product identity, current listed price, stock status/backorder state and product URL at the observed time.
+- WooCommerce fields returned by the facade establish current Simpli commerce facts only: exact product identity, current listed price, stock status/backorder state and product URL at the observed time.
 - Exact semantic product claims such as formula, ingredients, suitability, best-for, routine role, usage, KEEP/NO-PURCHASE guidance or alternatives may be used ONLY from product_intelligence when its state is STATE_VERIFIED and admission.all_passed is true.
 - Never use model memory or legacy product-page prose as exact-product truth when Golden Product Intelligence is unavailable, stale or rejected.
 - For exact product questions: resolve identity with PRODUCT_SEARCH when needed, then use PRODUCT_GET before making semantic claims.
@@ -80,6 +81,17 @@ TRUTH CONTRACT
 - Treat current stock as a later hard practical constraint after suitability. Never present an item whose stock_status is not instock as immediately purchasable. If it is the best fit but unavailable, say so and prefer NOT_NOW or a separately verified suitable alternative rather than pretending availability.
 - If customer context is insufficient, ask only the minimum question that could change the decision. Do not run a generic questionnaire.
 - General Start-Safe education may use the stable Simpli method: cleanser + moisturiser + sunscreen first, one primary concern, introduce changes gradually, observe tolerance, then adjust. Do not turn generic education into an exact-product claim.
+
+SUPPLIER-SOURCING CONTRACT
+- SOURCING_SEARCH is a redacted, dated supplier-catalogue signal only. It never proves Simpli stock, a purchase commitment, authenticity, product quality, formula, suitability, customer price, procurement approval or delivery ETA.
+- Use SOURCING_SEARCH only when the customer explicitly asks whether Simpli can source/bring in/obtain a named or exact product. Do not browse supplier listings to invent recommendations, alternatives, upsells or a shopping menu.
+- If the sourcing packet state is SOURCE_UNAVAILABLE, say simply that you cannot verify a sourcing option right now. Do not guess from memory.
+- If the sourcing packet is STATE_VERIFIED and contains a matching item, describe it only as a possible/current sourcing lead from dated supplier evidence. Make clear that availability for Simpli is not yet confirmed.
+- A supplier-catalogue match is not "in stock", "available now", "reserved", "ordered", "confirmed", or an ETA. Never promise procurement or arrival.
+- Never expose or mention supplier identity, ABW, wholesale price, supplier cost, USD pricing, box pricing, tier pricing, catalogue file names, supplier IDs or internal mapping fields to the customer.
+- Never infer authenticity merely because a supplier catalogue lists a product.
+- Never use supplier evidence to make suitability/ingredient/formula claims. Those still require admitted Golden Product Intelligence.
+- A sourcing signal alone must not produce customer_decision=ADD. Use UNDECIDED or NOT_NOW until normal product/suitability/current-commerce gates are satisfied.
 
 ROUTINE BEHAVIOR
 - Preserve suitable products the customer already owns. Do not replace them just because Simpli sells another option.
@@ -118,7 +130,7 @@ GREAT MARKETER BEHAVIOR
 - Do not push a premium or in-stock product merely because it is commercially attractive. Suitability remains ahead of commerce.
 
 CUSTOMER RESPONSE SHAPE
-- Lead with the answer after the required first-conversation name introduction; do not add a long preamble.
+- Lead with the answer after any necessary first-conversation name introduction; do not add a long preamble.
 - Then give the most useful reason or trade-off in plain language.
 - End with one natural next step only when it helps the customer move forward; do not mechanically end every reply with a question.
 - If you need more context, ask one decision-changing question at a time and briefly say why it matters in customer language.
@@ -132,6 +144,8 @@ const CURRENT_COMMERCE=/\b(how much|price|prices|cost|costs|cheaper|more expensi
 const PRODUCT_COMPARE=/\b(compare|comparison|difference between|vs\.?|versus|which (?:one )?is better|better between|choose between)\b/i;
 const PRODUCT_DETAIL=/\b(ingredients?|inci|formula|full ingredient|how to use|directions|best for|suitable for|texture|finish|routine role|what does this product|tell me about this product|worth buying)\b/i;
 const BROAD_RECOMMENDATION=/\b(recommend(?:ation| me)?|what should i (?:use|buy)|which (?:product|serum|sunscreen|cleanser|moisturi[sz]er|toner)|best (?:product|serum|sunscreen|cleanser|moisturi[sz]er|toner)|build (?:me )?(?:a )?routine|routine for|help me choose)\b/i;
+const SOURCING_REQUEST=/\b(?:can|could|would)\s+(?:you|simpli)\s+(?:source|get|bring|order|find)\b|\b(?:can|could)\s+(?:this|that|it)\s+be\s+(?:sourced|ordered)\b|\b(?:source|special[- ]order|bring in|order in)\s+(?:this|that|it|the)\b/i;
+const BROAD_SOURCING=/\b(?:source|get|bring|find)\s+(?:me\s+)?(?:a|an|some|any)\s+(?:product|serum|sunscreen|cleanser|moisturi[sz]er|toner)\b/i;
 const ADEQUATE_BASELINE_SIGNAL='(?:comfortable|works? (?:well|for me)|working (?:well|for me)|use (?:it )?(?:every morning|every day|daily)|without (?:a )?(?:problem|issue)|no (?:problem|issue)|happy with (?:it|this)|suits? me)';
 const KEEP_CATEGORY_RULES=[
   {adequate:new RegExp(`\\bmy (?:current )?sunscreen\\b[\\s\\S]{0,180}\\b${ADEQUATE_BASELINE_SIGNAL}\\b`,'i'),shopping:/\b(?:which|what) sunscreen should i (?:buy|use)(?: instead)?\b|\b(?:replace|swap)[^.!?]{0,60}\bsunscreen\b/i},
@@ -140,6 +154,10 @@ const KEEP_CATEGORY_RULES=[
 ];
 const EXPLICIT_REPLACEMENT_NEED=/\b(?:too heavy|too greasy|white cast|stings?|burns?|irritat(?:es|ing|ed)?|break(?:s|ing)? me out|too expensive|out of stock|ran out|finished|dislike|don'?t like|want (?:a )?(?:lighter|cheaper|richer|more matte|dewier|fragrance[- ]free))\b/i;
 const SIMPLI_INTRO=/\b(?:i['’]?m|i am)\s+simpli\b/i;
+const SOURCING_PRIVATE_KEY=/\b(?:base_unit_price_usd|unit_price_usd|box_price_usd|tiers|best_valid_purchase_option|supplier_code|file_sha256|source_attachment_id|wholesale)\b/i;
+const SOURCING_RESPONSE_PRIVATE=/\b(?:abw|wholesale|supplier price|supplier cost|vendor price|usd)\b|\$/i;
+const SOURCING_CERTAINTY=/\b(?:we|i)\s+(?:can|will)\s+(?:source|get|order|bring)\b|\b(?:will arrive|arrives in|eta is|guaranteed|reserved|confirmed for us|available now at simpli)\b/i;
+const SOURCING_UNCERTAINTY=/\b(?:possible|potential|may|might|could|not confirmed|isn't confirmed|is not confirmed|can't confirm|cannot confirm|can't verify|cannot verify|sourcing option|sourcing lead)\b/i;
 
 export function requiresLiveProductTruth(text=''){return CURRENT_COMMERCE.test(String(text||''));}
 export function existingRoutineKeepCandidate(text=''){
@@ -150,6 +168,8 @@ export function existingRoutineKeepCandidate(text=''){
 export function groundingRequirement(text=''){
   const value=String(text||'');
   if(existingRoutineKeepCandidate(value))return{required:false,kind:'EXISTING_ROUTINE_KEEP'};
+  if(BROAD_SOURCING.test(value))return{required:true,kind:'GOLDEN_RECOMMENDATION'};
+  if(SOURCING_REQUEST.test(value))return{required:true,kind:'SOURCING'};
   if(PRODUCT_COMPARE.test(value))return{required:true,kind:'PRODUCT_COMPARE'};
   if(BROAD_RECOMMENDATION.test(value))return{required:true,kind:'GOLDEN_RECOMMENDATION'};
   if(PRODUCT_DETAIL.test(value))return{required:true,kind:'PRODUCT_DETAIL'};
@@ -198,6 +218,12 @@ function admittedProductIntelligence(value){return value?.state==='STATE_VERIFIE
 function admittedProductGetCount(calls){return calls.filter(x=>x.output?.operation==='PRODUCT_GET'&&admittedProductIntelligence(x.output?.product_intelligence)).length;}
 function goldenListHasAdmitted(calls){return calls.some(x=>x.output?.operation==='GOLDEN_LIST'&&Array.isArray(x.output?.items)&&x.output.items.some(item=>admittedProductIntelligence(item?.product_intelligence)));}
 function hasAdmittedGoldenEvidence(calls){return admittedProductGetCount(calls)>0||goldenListHasAdmitted(calls);}
+function sourcingCall(calls){return calls.find(x=>x.output?.operation==='SOURCING_SEARCH')||null;}
+function sourcingBoundarySafe(output){
+  if(!output||output.operation!=='SOURCING_SEARCH')return false;
+  if(output.commercial_cost_exposed!==false||output.supplier_identity_exposed!==false||output.simpli_stock_assertion!==false||output.purchase_promise!==false||output.recommendation_authority!=='NONE')return false;
+  return !SOURCING_PRIVATE_KEY.test(JSON.stringify(output));
+}
 function safeAbstention(packet){
   return ['ASK_MINIMUM_QUESTION','ROUTE_PRODUCT_VERIFY','ROUTE_ROUTINE','HOLD_FOR_CURRENT_STATE'].includes(packet?.advisor_action)
     && ['UNKNOWN','PARTIAL'].includes(packet?.evidence_state)
@@ -211,6 +237,11 @@ export function deriveEvidenceState({requirement,toolCalls,packet}){
   if(requirement.kind==='PRODUCT_COMPARE'&&admittedProductGetCount(calls)>=2)return'GOLDEN_PRODUCT_VERIFIED';
   if(requirement.kind==='GOLDEN_RECOMMENDATION'&&goldenListHasAdmitted(calls))return'GOLDEN_PRODUCT_VERIFIED';
   if(requirement.kind==='CURRENT_COMMERCE'&&calls.some(call=>['PRODUCT_SEARCH','PRODUCT_GET'].includes(call.output?.operation)))return'CURRENT_COMMERCE_VERIFIED';
+  if(requirement.kind==='SOURCING'){
+    const source=sourcingCall(calls)?.output;
+    if(source?.state==='STATE_VERIFIED'&&sourcingBoundarySafe(source))return'SUPPLIER_SIGNAL_VERIFIED';
+    return'UNKNOWN';
+  }
   return packet?.evidence_state||'UNKNOWN';
 }
 export function validateGrounding({requirement,toolCalls,packet}){
@@ -227,10 +258,22 @@ export function validateGrounding({requirement,toolCalls,packet}){
   if(requirement.kind==='PRODUCT_COMPARE'&&admittedProductGetCount(calls)<2&&!abstaining)throw new Error('PRODUCT_COMPARE_EVIDENCE_INSUFFICIENT');
   if(requirement.kind==='GOLDEN_RECOMMENDATION'&&!goldenListHasAdmitted(calls)&&!abstaining)throw new Error('GOLDEN_RECOMMENDATION_EVIDENCE_INSUFFICIENT');
   if(['PRODUCT_DETAIL','PRODUCT_COMPARE','GOLDEN_RECOMMENDATION'].includes(requirement.kind)&&!abstaining&&evidenceState!=='GOLDEN_PRODUCT_VERIFIED')throw new Error('SEMANTIC_ANSWER_REQUIRES_GOLDEN_EVIDENCE_STATE');
+  if(requirement.kind==='SOURCING'){
+    const source=sourcingCall(calls)?.output;
+    if(!source)throw new Error('SOURCING_SEARCH_REQUIRED_BUT_NOT_USED');
+    if(!sourcingBoundarySafe(source))throw new Error('SOURCING_BOUNDARY_VIOLATION');
+    if(packet?.customer_decision==='ADD')throw new Error('SOURCING_SIGNAL_CANNOT_AUTHORIZE_ADD');
+    const response=String(packet?.response_text||'');
+    if(SOURCING_RESPONSE_PRIVATE.test(response))throw new Error('SOURCING_PRIVATE_COMMERCIAL_LEAK');
+    if(SOURCING_CERTAINTY.test(response))throw new Error('SOURCING_CERTAINTY_FORBIDDEN');
+    if(!SOURCING_UNCERTAINTY.test(response))throw new Error('SOURCING_UNCERTAINTY_REQUIRED');
+    if(source.state==='SOURCE_UNAVAILABLE'&&evidenceState!=='UNKNOWN')throw new Error('SOURCING_UNAVAILABLE_MUST_REMAIN_UNKNOWN');
+    if(source.state==='STATE_VERIFIED'&&evidenceState!=='SUPPLIER_SIGNAL_VERIFIED')throw new Error('SOURCING_EVIDENCE_STATE_INVALID');
+  }
   if(packet?.customer_decision==='ADD'&&(evidenceState!=='GOLDEN_PRODUCT_VERIFIED'||!hasAdmittedGoldenEvidence(calls)))throw new Error('ADD_REQUIRES_GOLDEN_PRODUCT_EVIDENCE');
   return true;
 }
-function reasoningEffort(kind){return ['PRODUCT_COMPARE','GOLDEN_RECOMMENDATION','PRODUCT_DETAIL','EXISTING_ROUTINE_KEEP'].includes(kind)?'medium':'low';}
+function reasoningEffort(kind){return ['PRODUCT_COMPARE','GOLDEN_RECOMMENDATION','PRODUCT_DETAIL','EXISTING_ROUTINE_KEEP','SOURCING'].includes(kind)?'medium':'low';}
 
 export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,messages,conversationId,previousResponseId}){
   if(!apiKey)throw new Error('OPENAI_API_KEY is not configured');
@@ -239,7 +282,7 @@ export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,message
   const requirement=groundingRequirement(latestInboundText(messages));
   if(requirement.required&&!hasMcp)throw new Error('GROUNDED_TOOL_NOT_CONFIGURED');
   const tools=[];
-  if(hasMcp&&requirement.kind!=='EXISTING_ROUTINE_KEEP')tools.push({type:'mcp',server_label:'simpli',server_url:mcpUrl,authorization:mcpToken,server_description:'Simpli governed current commerce and admitted Golden Product Intelligence exposed through one read-only WhatsApp facade. No customer/order/payment/admin/write access.',require_approval:'never',allowed_tools:[WHATSAPP_READ_FACADE]});
+  if(hasMcp&&requirement.kind!=='EXISTING_ROUTINE_KEEP')tools.push({type:'mcp',server_label:'simpli',server_url:mcpUrl,authorization:mcpToken,server_description:'Simpli governed current commerce, admitted Golden Product Intelligence and redacted supplier-sourcing signals exposed through one read-only WhatsApp facade. No customer/order/payment/admin/write or supplier-commercial access.',require_approval:'never',allowed_tools:[WHATSAPP_READ_FACADE]});
   const payload={
     model,instructions:INSTRUCTIONS,input,
     reasoning:{effort:reasoningEffort(requirement.kind)},max_output_tokens:1500,store:false,
@@ -255,7 +298,7 @@ export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,message
   const toolCalls=completedMcpCalls(data);
   const failedCalls=failedFacadeCalls(toolCalls);
   const successfulCalls=successfulFacadeCalls(toolCalls);
-  console.log(JSON.stringify({event:'MCP_GROUNDING_TRACE',configuration_id:AI_CONFIGURATION_ID,voice_version:VOICE_VERSION,failed_call_count:failedCalls.length,successful_call_count:successfulCalls.length,recovered_after_failed_call:failedCalls.length>0&&successfulCalls.length>0,calls:toolCalls.map(call=>({name:call.name,status:call.status||null,error:!!call.error,raw_output_type:call.raw_output_type,labeled_output:call.labeled_output,truncated_output:call.truncated_output,operation:call.output?.operation||null,state:call.output?.state||null,product_intelligence_state:call.output?.product_intelligence?.state||null,admission_all_passed:call.output?.product_intelligence?.admission?.all_passed===true,golden_items_admitted:Array.isArray(call.output?.items)?call.output.items.filter(item=>admittedProductIntelligence(item?.product_intelligence)).length:null}))}));
+  console.log(JSON.stringify({event:'MCP_GROUNDING_TRACE',configuration_id:AI_CONFIGURATION_ID,voice_version:VOICE_VERSION,failed_call_count:failedCalls.length,successful_call_count:successfulCalls.length,recovered_after_failed_call:failedCalls.length>0&&successfulCalls.length>0,calls:toolCalls.map(call=>({name:call.name,status:call.status||null,error:!!call.error,raw_output_type:call.raw_output_type,labeled_output:call.labeled_output,truncated_output:call.truncated_output,operation:call.output?.operation||null,state:call.output?.state||null,product_intelligence_state:call.output?.product_intelligence?.state||null,admission_all_passed:call.output?.product_intelligence?.admission?.all_passed===true,golden_items_admitted:Array.isArray(call.output?.items)?call.output.items.filter(item=>admittedProductIntelligence(item?.product_intelligence)).length:null,sourcing_boundary_safe:call.output?.operation==='SOURCING_SEARCH'?sourcingBoundarySafe(call.output):null,sourcing_returned:call.output?.operation==='SOURCING_SEARCH'?Number(call.output?.returned||0):null}))}));
   const text=data.output_text||data.output?.flatMap(x=>x.content||[]).find(c=>c.type==='output_text')?.text;
   if(!text)throw new Error('OpenAI returned no output text');
   const modelPacket=JSON.parse(text);
@@ -266,6 +309,9 @@ export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,message
     packet={...packet,primary_intent:'EXISTING_ROUTINE_DECISION',specialist_route:'ASK_SIMPLI_ROUTINE_INTELLIGENCE',evidence_state:'NOT_REQUIRED'};
     if(packet.customer_decision==='ADD')throw new Error('KEEP_CONTEXT_ADD_FORBIDDEN');
     if(packet.advisor_action!=='ANSWER_DIRECT')throw new Error('KEEP_CONTEXT_MUST_ANSWER_DIRECT');
+  }
+  if(requirement.kind==='SOURCING'){
+    packet={...packet,primary_intent:'PRODUCT_SOURCING',specialist_route:'SUPPLY_INVENTORY_INTELLIGENCE',customer_decision:packet.customer_decision==='NO_PURCHASE'?'NO_PURCHASE':(packet.customer_decision==='NOT_NOW'?'NOT_NOW':'UNDECIDED')};
   }
   validateGrounding({requirement,toolCalls,packet});
   packet={...packet,response_text:ensureFirstReplyIdentity(packet.response_text,messages)};
