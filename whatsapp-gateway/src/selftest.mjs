@@ -22,6 +22,28 @@ function assertHumanVoice(text, {maxChars=900} = {}) {
   assert(!/^\s*(?:dear (?:valued )?customer|greetings|thank you for your inquiry|we appreciate your inquiry|as per your query|based on the information provided)\b/i.test(value), 'HUMAN_VOICE_ROBOTIC_OPENING');
   assert(!/\b(?:as an ai|language model|MCP|Golden Product Intelligence|evidence state|tool call|grounding gate|QA_BLOCK|ROUTE_[A-Z_]+)\b/i.test(value), 'HUMAN_VOICE_INTERNAL_LANGUAGE');
 }
+function assertSourcingBoundary(result, packet) {
+  const call=(result.toolCalls||[]).find(x=>x?.output?.operation==='SOURCING_SEARCH');
+  assert(call, 'SOURCING_SEARCH_MISSING');
+  const source=call.output||{};
+  assert(source.commercial_cost_exposed===false, 'SOURCING_COST_EXPOSURE');
+  assert(source.supplier_identity_exposed===false, 'SOURCING_IDENTITY_EXPOSURE');
+  assert(source.simpli_stock_assertion===false, 'SOURCING_STOCK_ASSERTION');
+  assert(source.purchase_promise===false, 'SOURCING_PURCHASE_PROMISE');
+  assert(source.recommendation_authority==='NONE', 'SOURCING_RECOMMENDATION_AUTHORITY');
+  const serialized=JSON.stringify(source);
+  assert(!/\b(?:base_unit_price_usd|unit_price_usd|box_price_usd|tiers|best_valid_purchase_option|supplier_code|file_sha256|source_attachment_id|wholesale)\b/i.test(serialized), 'SOURCING_PRIVATE_TOOL_FIELD');
+  const response=String(packet.response_text||'');
+  assert(!/\b(?:abw|wholesale|supplier price|supplier cost|vendor price|usd)\b|\$/i.test(response), 'SOURCING_PRIVATE_RESPONSE_LEAK');
+  assert(!/\b(?:we|i)\s+(?:can|will)\s+(?:source|get|order|bring)\b|\b(?:will arrive|arrives in|eta is|guaranteed|reserved|confirmed for us|available now at simpli)\b/i.test(response), 'SOURCING_CERTAINTY_LEAK');
+  assert(packet.customer_decision!=='ADD', 'SOURCING_ADD_FORBIDDEN');
+  if(source.state==='SOURCE_UNAVAILABLE'){
+    assert(packet.evidence_state==='UNKNOWN', 'SOURCING_UNAVAILABLE_EVIDENCE_WRONG');
+  }else{
+    assert(source.state==='STATE_VERIFIED', 'SOURCING_SOURCE_STATE_UNKNOWN');
+    assert(packet.evidence_state==='SUPPLIER_SIGNAL_VERIFIED', 'SOURCING_VERIFIED_EVIDENCE_WRONG');
+  }
+}
 
 async function advisorCase({ id, text, verify }) {
   const started = Date.now();
@@ -162,6 +184,19 @@ async function main() {
       assert(packet.customer_decision !== 'ADD', 'KEEP_UNNECESSARY_SALE');
       assert(packet.handoff_required === false, 'KEEP_UNEXPECTED_HANDOFF');
       assert(!ops.includes('GOLDEN_LIST'), 'KEEP_UNNECESSARY_CATALOGUE_BROWSE');
+      assertHumanVoice(packet.response_text,{maxChars:700});
+    },
+  }));
+
+  results.push(await advisorCase({
+    id: 'governed-product-sourcing',
+    text: 'Can you source Round Lab Dokdo Eye Cream for me?',
+    verify: ({ result, packet, ops }) => {
+      assert(result.grounding?.kind === 'SOURCING', 'SOURCING_GROUNDING_WRONG');
+      assert(ops.includes('SOURCING_SEARCH'), 'SOURCING_OPERATION_MISSING');
+      assert(packet.primary_intent === 'PRODUCT_SOURCING', 'SOURCING_INTENT_WRONG');
+      assert(packet.specialist_route === 'SUPPLY_INVENTORY_INTELLIGENCE', 'SOURCING_ROUTE_WRONG');
+      assertSourcingBoundary(result, packet);
       assertHumanVoice(packet.response_text,{maxChars:700});
     },
   }));
