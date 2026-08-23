@@ -76,7 +76,7 @@ ROUTINE BEHAVIOR
 - Preserve suitable products the customer already owns. Do not replace them just because Simpli sells another option.
 - Avoid unnecessary active stacking. One primary concern at a time is preferred.
 - If a current sunscreen/moisturiser/cleanser is comfortable and adequate, KEEP can be the best answer.
-- When the customer explicitly says a current baseline product is comfortable, consistently used and causing no problem, do not browse the catalogue merely to find a replacement. Unless the customer identifies a real unmet need, answer the keep/replace decision first and prefer KEEP or NO_PURCHASE. Catalogue retrieval becomes necessary only if you are going to name a new product or compare exact alternatives.
+- When the customer explicitly says the same baseline product category they want to replace is comfortable, consistently used and causing no problem, do not browse the catalogue merely to find a replacement. Unless they identify a real unmet need, answer the keep/replace decision first and prefer KEEP or NO_PURCHASE. This does not apply when a different routine step is missing, or when they state a real problem such as heaviness, white cast, irritation, price, availability or another preference gap.
 - If evidence is insufficient for a specific recommendation, choose ASK_MINIMUM_QUESTION, ROUTE_ROUTINE, ROUTE_PRODUCT_VERIFY, NOT_NOW or NO_PURCHASE rather than guessing.
 
 HIGH-RISK FALLBACK
@@ -123,13 +123,19 @@ const CURRENT_COMMERCE=/\b(how much|price|prices|cost|costs|cheaper|more expensi
 const PRODUCT_COMPARE=/\b(compare|comparison|difference between|vs\.?|versus|which (?:one )?is better|better between|choose between)\b/i;
 const PRODUCT_DETAIL=/\b(ingredients?|inci|formula|full ingredient|how to use|directions|best for|suitable for|texture|finish|routine role|what does this product|tell me about this product|worth buying)\b/i;
 const BROAD_RECOMMENDATION=/\b(recommend(?:ation| me)?|what should i (?:use|buy)|which (?:product|serum|sunscreen|cleanser|moisturi[sz]er|toner)|best (?:product|serum|sunscreen|cleanser|moisturi[sz]er|toner)|build (?:me )?(?:a )?routine|routine for|help me choose)\b/i;
-const ADEQUATE_EXISTING_BASELINE=/\b(?:my|the) (?:current )?(?:sunscreen|moisturi[sz]er|cleanser)\b[\s\S]{0,180}\b(?:comfortable|works? (?:well|for me)|working (?:well|for me)|use (?:it )?(?:every morning|every day|daily)|without (?:a )?(?:problem|issue)|no (?:problem|issue)|happy with (?:it|this)|suits? me)\b/i;
-const REPLACEMENT_SHOPPING=/\b(?:which|what) (?:sunscreen|moisturi[sz]er|cleanser|product) should i (?:buy|use)(?: instead)?\b|\b(?:buy|use|replace)[^.!?]{0,60}\binstead\b/i;
+const ADEQUATE_BASELINE_SIGNAL='(?:comfortable|works? (?:well|for me)|working (?:well|for me)|use (?:it )?(?:every morning|every day|daily)|without (?:a )?(?:problem|issue)|no (?:problem|issue)|happy with (?:it|this)|suits? me)';
+const KEEP_CATEGORY_RULES=[
+  {adequate:new RegExp(`\\bmy (?:current )?sunscreen\\b[\\s\\S]{0,180}\\b${ADEQUATE_BASELINE_SIGNAL}\\b`,'i'),shopping:/\b(?:which|what) sunscreen should i (?:buy|use)(?: instead)?\b|\b(?:replace|swap)[^.!?]{0,60}\bsunscreen\b/i},
+  {adequate:new RegExp(`\\bmy (?:current )?moisturi[sz]er\\b[\\s\\S]{0,180}\\b${ADEQUATE_BASELINE_SIGNAL}\\b`,'i'),shopping:/\b(?:which|what) moisturi[sz]er should i (?:buy|use)(?: instead)?\b|\b(?:replace|swap)[^.!?]{0,60}\bmoisturi[sz]er\b/i},
+  {adequate:new RegExp(`\\bmy (?:current )?cleanser\\b[\\s\\S]{0,180}\\b${ADEQUATE_BASELINE_SIGNAL}\\b`,'i'),shopping:/\b(?:which|what) cleanser should i (?:buy|use)(?: instead)?\b|\b(?:replace|swap)[^.!?]{0,60}\bcleanser\b/i}
+];
+const EXPLICIT_REPLACEMENT_NEED=/\b(?:too heavy|too greasy|white cast|stings?|burns?|irritat(?:es|ing|ed)?|break(?:s|ing)? me out|too expensive|out of stock|ran out|finished|dislike|don'?t like|want (?:a )?(?:lighter|cheaper|richer|more matte|dewier|fragrance[- ]free))\b/i;
 
 export function requiresLiveProductTruth(text=''){return CURRENT_COMMERCE.test(String(text||''));}
 export function existingRoutineKeepCandidate(text=''){
   const value=String(text||'');
-  return ADEQUATE_EXISTING_BASELINE.test(value)&&REPLACEMENT_SHOPPING.test(value);
+  if(EXPLICIT_REPLACEMENT_NEED.test(value))return false;
+  return KEEP_CATEGORY_RULES.some(rule=>rule.adequate.test(value)&&rule.shopping.test(value));
 }
 export function groundingRequirement(text=''){
   const value=String(text||'');
@@ -217,14 +223,14 @@ export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,message
   const requirement=groundingRequirement(latestInboundText(messages));
   if(requirement.required&&!hasMcp)throw new Error('GROUNDED_TOOL_NOT_CONFIGURED');
   const tools=[];
-  if(hasMcp)tools.push({type:'mcp',server_label:'simpli',server_url:mcpUrl,authorization:mcpToken,server_description:'Simpli governed current commerce and admitted Golden Product Intelligence exposed through one read-only WhatsApp facade. No customer/order/payment/admin/write access.',require_approval:'never',allowed_tools:[WHATSAPP_READ_FACADE]});
+  if(hasMcp&&requirement.kind!=='EXISTING_ROUTINE_KEEP')tools.push({type:'mcp',server_label:'simpli',server_url:mcpUrl,authorization:mcpToken,server_description:'Simpli governed current commerce and admitted Golden Product Intelligence exposed through one read-only WhatsApp facade. No customer/order/payment/admin/write access.',require_approval:'never',allowed_tools:[WHATSAPP_READ_FACADE]});
   const payload={
-    model,instructions:INSTRUCTIONS,input,tools,
-    tool_choice:requirement.required?{type:'mcp',server_label:'simpli',name:WHATSAPP_READ_FACADE}:'auto',
+    model,instructions:INSTRUCTIONS,input,
     reasoning:{effort:reasoningEffort(requirement.kind)},max_output_tokens:1500,store:false,
     metadata:{workflow:'simpli_whatsapp',configuration_id:AI_CONFIGURATION_ID,prompt_version:PROMPT_VERSION,guardrail_version:GUARDRAIL_VERSION,toolset_version:TOOLSET_VERSION,voice_version:VOICE_VERSION,conversation_id:String(conversationId).slice(0,64)},
     text:{format:{type:'json_schema',name:'simpli_whatsapp_packet',strict:true,schema:RESPONSE_SCHEMA}}
   };
+  if(tools.length){payload.tools=tools;payload.tool_choice=requirement.required?{type:'mcp',server_label:'simpli',name:WHATSAPP_READ_FACADE}:'auto';}
   void previousResponseId;
   const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{authorization:`Bearer ${apiKey}`,'content-type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(70000)}),raw=await r.text();
   if(!r.ok)throw new Error(`OpenAI response failed ${r.status}: ${raw.slice(0,800)}`);
@@ -238,8 +244,14 @@ export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,message
   if(!text)throw new Error('OpenAI returned no output text');
   const modelPacket=JSON.parse(text);
   const modelEvidenceState=modelPacket.evidence_state;
-  const packet={...modelPacket,evidence_state:deriveEvidenceState({requirement,toolCalls,packet:modelPacket})};
+  const modelPrimaryIntent=modelPacket.primary_intent;
+  let packet={...modelPacket,evidence_state:deriveEvidenceState({requirement,toolCalls,packet:modelPacket})};
+  if(requirement.kind==='EXISTING_ROUTINE_KEEP'){
+    packet={...packet,primary_intent:'EXISTING_ROUTINE_DECISION',specialist_route:'ASK_SIMPLI_ROUTINE_INTELLIGENCE',evidence_state:'NOT_REQUIRED'};
+    if(packet.customer_decision==='ADD')throw new Error('KEEP_CONTEXT_ADD_FORBIDDEN');
+    if(packet.advisor_action!=='ANSWER_DIRECT')throw new Error('KEEP_CONTEXT_MUST_ANSWER_DIRECT');
+  }
   validateGrounding({requirement,toolCalls,packet});
-  console.log(JSON.stringify({event:'OPENAI_ADVISOR_RESULT',configuration_id:AI_CONFIGURATION_ID,voice_version:VOICE_VERSION,grounding_kind:requirement.kind,grounding_required:requirement.required,tool_calls:toolCalls.map(x=>x.name),operations:toolCalls.map(x=>x.output?.operation).filter(Boolean),failed_tool_calls:failedCalls.length,recovered_after_failed_call:failedCalls.length>0&&successfulCalls.length>0,primary_intent:packet.primary_intent,advisor_action:packet.advisor_action,specialist_route:packet.specialist_route,model_evidence_state:modelEvidenceState,evidence_state:packet.evidence_state,evidence_state_adjusted:modelEvidenceState!==packet.evidence_state,customer_decision:packet.customer_decision,handoff_required:packet.handoff_required}));
+  console.log(JSON.stringify({event:'OPENAI_ADVISOR_RESULT',configuration_id:AI_CONFIGURATION_ID,voice_version:VOICE_VERSION,grounding_kind:requirement.kind,grounding_required:requirement.required,tool_calls:toolCalls.map(x=>x.name),operations:toolCalls.map(x=>x.output?.operation).filter(Boolean),failed_tool_calls:failedCalls.length,recovered_after_failed_call:failedCalls.length>0&&successfulCalls.length>0,model_primary_intent:modelPrimaryIntent,primary_intent:packet.primary_intent,primary_intent_adjusted:modelPrimaryIntent!==packet.primary_intent,advisor_action:packet.advisor_action,specialist_route:packet.specialist_route,model_evidence_state:modelEvidenceState,evidence_state:packet.evidence_state,evidence_state_adjusted:modelEvidenceState!==packet.evidence_state,customer_decision:packet.customer_decision,handoff_required:packet.handoff_required}));
   return{blocked:false,responseId:data.id,packet,toolCalls,configurationId:AI_CONFIGURATION_ID,grounding:requirement};
 }
