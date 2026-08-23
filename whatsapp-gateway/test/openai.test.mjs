@@ -43,6 +43,13 @@ test('grounding classifier distinguishes commerce detail comparison and recommen
   assert.equal(groundingRequirement('Hi').kind,'NONE');
 });
 
+test('adequate existing baseline is a KEEP decision before catalogue lookup',()=>{
+  assert.deepEqual(
+    groundingRequirement('My current sunscreen feels comfortable and I use it every morning without a problem. Which sunscreen should I buy instead?'),
+    {required:false,kind:'EXISTING_ROUTINE_KEEP'}
+  );
+});
+
 test('price question forces the safe MCP facade and stays stateless at OpenAI',async()=>{
   const original=globalThis.fetch;let requestBody;
   globalThis.fetch=async(_url,opts)=>{requestBody=JSON.parse(opts.body);return mockResponse([mcp('PRODUCT_SEARCH')]);};
