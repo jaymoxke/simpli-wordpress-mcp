@@ -1,0 +1,1 @@
+Build state: code complete for SHADOW deployment. Production customer sending remains gated on YCloud credentials, OpenAI key, business-hours configuration, read-only Simpli grounding, shadow evaluation and limited-release acceptance.
