@@ -15,7 +15,7 @@ function mcp(operation,{error=null,status=undefined,payload={},labeled=true}={})
 function productGet({admitted=true}={}){return mcp('PRODUCT_GET',{payload:{product_intelligence:admitted?GOLDEN_INTELLIGENCE:REVIEW_INTELLIGENCE}});}
 function goldenList({admitted=true}={}){return mcp('GOLDEN_LIST',{payload:{items:admitted?[{product_intelligence:GOLDEN_INTELLIGENCE}]:[{product_intelligence:REVIEW_INTELLIGENCE}]}});}
 function sourcingUnavailable(){return mcp('SOURCING_SEARCH',{payload:{state:'SOURCE_UNAVAILABLE',catalogue_available:false,evidence_class:'SUPPLIER_CATALOGUE_SIGNAL',items:[],returned:0,simpli_stock_assertion:false,purchase_promise:false,recommendation_authority:'NONE',commercial_cost_exposed:false,supplier_identity_exposed:false}});}
-function sourcingVerified(overrides={}){return mcp('SOURCING_SEARCH',{payload:{state:'STATE_VERIFIED',catalogue_available:true,catalogue_date:'2026-08-24',catalogue_imported_gmt:'2026-08-24T00:00:00+00:00',evidence_class:'SUPPLIER_CATALOGUE_SIGNAL',items:[{brand:'Example Brand',product_name:'Exact Product',option_name:'50ml',listing_type:'unit_product',supplier_availability_signal:'Available',supplier_lead_time_signal_days:14,mapping_state:'UNMAPPED'}],returned:1,simpli_stock_assertion:false,purchase_promise:false,recommendation_authority:'NONE',commercial_cost_exposed:false,supplier_identity_exposed:false,...overrides}});}
+function sourcingVerified(overrides={}){return mcp('SOURCING_SEARCH',{payload:{state:'STATE_VERIFIED',catalogue_available:true,catalogue_date:'2026-08-24',catalogue_imported_gmt:'2026-08-24T00:00:00+00:00',evidence_class:'SUPPLIER_CATALOGUE_SIGNAL',items:[{brand:'Example Brand',product_name:'Exact Product',option_name:'50ml',sourcing_signal:'SUPPLIER_LISTING_PRESENT'}],returned:1,untrusted_supplier_rows_rejected:0,simpli_stock_assertion:false,purchase_promise:false,recommendation_authority:'NONE',commercial_cost_exposed:false,supplier_identity_exposed:false,...overrides}});}
 function mockResponse(output=[],p=BASE_PACKET){return{ok:true,text:async()=>JSON.stringify({id:'resp_test',output,output_text:JSON.stringify(p)})};}
 
 test('configuration identity is explicit',()=>assert.equal(AI_CONFIGURATION_ID,'SIMPLI_WA_LUNA_EPITOME_SHADOW_V3_ABW_SOURCING'));
@@ -157,6 +157,15 @@ test('explicit sourcing request forces safe facade and fails closed when catalog
   }finally{globalThis.fetch=original;}
 });
 
+test('negated sourcing phrase does not become a false procurement promise',()=>{
+  const output=JSON.parse(sourcingUnavailable().output.slice(MCP_LABEL.length).trim());
+  const toolCalls=[{name:'simpli_whatsapp_read',server_label:'simpli',error:null,output}];
+  for(const response_text of ["I can't confirm whether we can source that right now.","I can't confirm that we can source that yet."]){
+    const p=packet({primary_intent:'PRODUCT_SOURCING',evidence_state:'UNKNOWN',customer_decision:'UNDECIDED',response_text});
+    assert.equal(validateGrounding({requirement:{required:true,kind:'SOURCING'},toolCalls,packet:p}),true);
+  }
+});
+
 test('positive redacted sourcing signal derives supplier evidence without authorizing a sale',async()=>{
   const original=globalThis.fetch;
   const p=packet({primary_intent:'PRODUCT_SOURCING',advisor_action:'ANSWER_DIRECT',specialist_route:'SUPPLY_INVENTORY_INTELLIGENCE',evidence_state:'PARTIAL',customer_decision:'UNDECIDED',response_text:'There may be a possible sourcing option for that exact product, but availability for Simpli is not confirmed yet.'});
@@ -173,6 +182,15 @@ test('positive redacted sourcing signal derives supplier evidence without author
 test('sourcing signal is rejected if private supplier commercial fields leak into the tool packet',()=>{
   const p=packet({primary_intent:'PRODUCT_SOURCING',evidence_state:'SUPPLIER_SIGNAL_VERIFIED',customer_decision:'UNDECIDED',response_text:'There may be a possible sourcing option, but it is not confirmed.'});
   const toolCalls=[{name:'simpli_whatsapp_read',server_label:'simpli',error:null,output:{state:'STATE_VERIFIED',operation:'SOURCING_SEARCH',items:[],returned:0,simpli_stock_assertion:false,purchase_promise:false,recommendation_authority:'NONE',commercial_cost_exposed:false,supplier_identity_exposed:false,base_unit_price_usd:12.50}}];
+  assert.throws(()=>validateGrounding({requirement:{required:true,kind:'SOURCING'},toolCalls,packet:p}),/SOURCING_BOUNDARY_VIOLATION/);
+});
+
+test('sourcing signal rejects raw supplier operational fields if the facade regresses',()=>{
+  const p=packet({primary_intent:'PRODUCT_SOURCING',evidence_state:'SUPPLIER_SIGNAL_VERIFIED',customer_decision:'UNDECIDED',response_text:'There may be a possible sourcing option, but it is not confirmed.'});
+  const output=JSON.parse(sourcingVerified().output.slice(MCP_LABEL.length).trim());
+  output.items[0].supplier_lead_time_signal_days=14;
+  output.items[0].mapping_state='UNMAPPED';
+  const toolCalls=[{name:'simpli_whatsapp_read',server_label:'simpli',error:null,output}];
   assert.throws(()=>validateGrounding({requirement:{required:true,kind:'SOURCING'},toolCalls,packet:p}),/SOURCING_BOUNDARY_VIOLATION/);
 });
 
