@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/server.mjs",
     "test": "node --test",
-    "selftest": "node src/selftest.mjs",
-    "check": "node --check src/server.mjs && node --check src/admin.js && node --check src/policy.mjs && node --check src/crypto.mjs && node --check src/db.mjs && node --check src/ycloud.mjs && node --check src/openai.mjs && node --check src/selftest.mjs"
+    "selftest": "node src/selftest.mjs && node src/identity-selftest.mjs",
+    "check": "node --check src/server.mjs && node --check src/admin.js && node --check src/policy.mjs && node --check src/crypto.mjs && node --check src/db.mjs && node --check src/ycloud.mjs && node --check src/openai.mjs && node --check src/selftest.mjs && node --check src/identity-selftest.mjs"
   }
 }
