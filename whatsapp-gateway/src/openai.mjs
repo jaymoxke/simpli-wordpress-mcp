@@ -76,6 +76,7 @@ ROUTINE BEHAVIOR
 - Preserve suitable products the customer already owns. Do not replace them just because Simpli sells another option.
 - Avoid unnecessary active stacking. One primary concern at a time is preferred.
 - If a current sunscreen/moisturiser/cleanser is comfortable and adequate, KEEP can be the best answer.
+- When the customer explicitly says a current baseline product is comfortable, consistently used and causing no problem, do not browse the catalogue merely to find a replacement. Unless the customer identifies a real unmet need, answer the keep/replace decision first and prefer KEEP or NO_PURCHASE. Catalogue retrieval becomes necessary only if you are going to name a new product or compare exact alternatives.
 - If evidence is insufficient for a specific recommendation, choose ASK_MINIMUM_QUESTION, ROUTE_ROUTINE, ROUTE_PRODUCT_VERIFY, NOT_NOW or NO_PURCHASE rather than guessing.
 
 HIGH-RISK FALLBACK
@@ -122,10 +123,17 @@ const CURRENT_COMMERCE=/\b(how much|price|prices|cost|costs|cheaper|more expensi
 const PRODUCT_COMPARE=/\b(compare|comparison|difference between|vs\.?|versus|which (?:one )?is better|better between|choose between)\b/i;
 const PRODUCT_DETAIL=/\b(ingredients?|inci|formula|full ingredient|how to use|directions|best for|suitable for|texture|finish|routine role|what does this product|tell me about this product|worth buying)\b/i;
 const BROAD_RECOMMENDATION=/\b(recommend(?:ation| me)?|what should i (?:use|buy)|which (?:product|serum|sunscreen|cleanser|moisturi[sz]er|toner)|best (?:product|serum|sunscreen|cleanser|moisturi[sz]er|toner)|build (?:me )?(?:a )?routine|routine for|help me choose)\b/i;
+const ADEQUATE_EXISTING_BASELINE=/\b(?:my|the) (?:current )?(?:sunscreen|moisturi[sz]er|cleanser)\b[\s\S]{0,180}\b(?:comfortable|works? (?:well|for me)|working (?:well|for me)|use (?:it )?(?:every morning|every day|daily)|without (?:a )?(?:problem|issue)|no (?:problem|issue)|happy with (?:it|this)|suits? me)\b/i;
+const REPLACEMENT_SHOPPING=/\b(?:which|what) (?:sunscreen|moisturi[sz]er|cleanser|product) should i (?:buy|use)(?: instead)?\b|\b(?:buy|use|replace)[^.!?]{0,60}\binstead\b/i;
 
 export function requiresLiveProductTruth(text=''){return CURRENT_COMMERCE.test(String(text||''));}
+export function existingRoutineKeepCandidate(text=''){
+  const value=String(text||'');
+  return ADEQUATE_EXISTING_BASELINE.test(value)&&REPLACEMENT_SHOPPING.test(value);
+}
 export function groundingRequirement(text=''){
   const value=String(text||'');
+  if(existingRoutineKeepCandidate(value))return{required:false,kind:'EXISTING_ROUTINE_KEEP'};
   if(PRODUCT_COMPARE.test(value))return{required:true,kind:'PRODUCT_COMPARE'};
   if(BROAD_RECOMMENDATION.test(value))return{required:true,kind:'GOLDEN_RECOMMENDATION'};
   if(PRODUCT_DETAIL.test(value))return{required:true,kind:'PRODUCT_DETAIL'};
@@ -200,7 +208,7 @@ export function validateGrounding({requirement,toolCalls,packet}){
   if(packet?.customer_decision==='ADD'&&(evidenceState!=='GOLDEN_PRODUCT_VERIFIED'||!hasAdmittedGoldenEvidence(calls)))throw new Error('ADD_REQUIRES_GOLDEN_PRODUCT_EVIDENCE');
   return true;
 }
-function reasoningEffort(kind){return ['PRODUCT_COMPARE','GOLDEN_RECOMMENDATION','PRODUCT_DETAIL'].includes(kind)?'medium':'low';}
+function reasoningEffort(kind){return ['PRODUCT_COMPARE','GOLDEN_RECOMMENDATION','PRODUCT_DETAIL','EXISTING_ROUTINE_KEEP'].includes(kind)?'medium':'low';}
 
 export async function runAdvisor({apiKey,model='gpt-5.6',mcpUrl,mcpToken,messages,conversationId,previousResponseId}){
   if(!apiKey)throw new Error('OPENAI_API_KEY is not configured');
