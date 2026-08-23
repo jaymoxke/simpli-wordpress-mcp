@@ -27,6 +27,12 @@ jobs:
         run: npm run check
       - name: Tests
         run: npm test
+      - name: WhatsApp gateway static checks
+        working-directory: whatsapp-gateway
+        run: npm run check
+      - name: WhatsApp gateway tests
+        working-directory: whatsapp-gateway
+        run: npm test
       - name: Build
         run: npm run build
       - name: Runtime syntax check
