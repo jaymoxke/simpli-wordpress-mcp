@@ -14,6 +14,12 @@ const allowedHosts = new Set(
     .filter(Boolean)
 );
 const restrictedPathPrefixes = ['/checkout', '/my-account', '/wp-admin', '/wp-login.php'];
+const MAX_QUEUE_DEPTH = 20;
+
+let browserPromise = null;
+let queueTail = Promise.resolve();
+let queuedJobs = 0;
+let activeJobs = 0;
 
 function requireAuth(req, res, next) {
   if (!API_TOKEN) return res.status(503).json({ error: 'SERVICE_NOT_CONFIGURED' });
@@ -49,6 +55,61 @@ function viewportFor(name) {
   return { width: 1440, height: 1000 };
 }
 
+function isBrowserLifecycleError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return message.includes('browser has been closed')
+    || message.includes('browser closed')
+    || message.includes('target page, context or browser has been closed')
+    || message.includes('eagain')
+    || message.includes('spawn')
+    || message.includes('connection closed');
+}
+
+async function closeSharedBrowser() {
+  const pending = browserPromise;
+  browserPromise = null;
+  if (!pending) return;
+  try {
+    const browser = await pending;
+    await browser.close().catch(() => {});
+  } catch {}
+}
+
+function getBrowser() {
+  if (!browserPromise) {
+    browserPromise = chromium.launch({
+      headless: true,
+      args: ['--disable-dev-shm-usage']
+    }).then((browser) => {
+      browser.on('disconnected', () => {
+        browserPromise = null;
+      });
+      return browser;
+    }).catch((error) => {
+      browserPromise = null;
+      throw error;
+    });
+  }
+  return browserPromise;
+}
+
+async function withBrowserSlot(callback) {
+  if (queuedJobs >= MAX_QUEUE_DEPTH) throw new Error('BROWSER_QA_BUSY');
+  queuedJobs += 1;
+  const previous = queueTail;
+  let release;
+  queueTail = new Promise((resolve) => { release = resolve; });
+  await previous.catch(() => {});
+  queuedJobs -= 1;
+  activeJobs += 1;
+  try {
+    return await callback();
+  } finally {
+    activeJobs -= 1;
+    release();
+  }
+}
+
 async function runActions(page, actions = []) {
   if (!Array.isArray(actions) || actions.length > 20) throw new Error('INVALID_ACTIONS');
   const results = [];
@@ -81,45 +142,83 @@ async function runActions(page, actions = []) {
 async function withPage(body, callback) {
   const target = validateTarget(body?.url);
   const viewport = viewportFor(String(body?.viewport || 'desktop'));
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({
-    viewport,
-    locale: 'en-KE',
-    timezoneId: 'Africa/Nairobi',
-    serviceWorkers: 'block'
-  });
-  const page = await context.newPage();
-  const consoleErrors = [];
-  const pageErrors = [];
-  const failedRequests = [];
-  page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text().slice(0, 1000)); });
-  page.on('pageerror', (err) => pageErrors.push(String(err.message || err).slice(0, 1000)));
-  page.on('requestfailed', (req) => failedRequests.push({ url: req.url().slice(0, 1000), error: req.failure()?.errorText || 'FAILED' }));
-  page.on('dialog', (dialog) => dialog.dismiss().catch(() => {}));
-  page.on('download', (download) => download.cancel().catch(() => {}));
 
-  try {
-    const response = await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
-    assertAllowedPageUrl(page.url(), 'NAVIGATION');
-    return await callback({ page, context, response, viewport, consoleErrors, pageErrors, failedRequests });
-  } finally {
-    await context.close().catch(() => {});
-    await browser.close().catch(() => {});
-  }
+  return withBrowserSlot(async () => {
+    let lastError;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      let context;
+      try {
+        const browser = await getBrowser();
+        context = await browser.newContext({
+          viewport,
+          locale: 'en-KE',
+          timezoneId: 'Africa/Nairobi',
+          serviceWorkers: 'block'
+        });
+        const page = await context.newPage();
+        const consoleErrors = [];
+        const pageErrors = [];
+        const failedRequests = [];
+        page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text().slice(0, 1000)); });
+        page.on('pageerror', (err) => pageErrors.push(String(err.message || err).slice(0, 1000)));
+        page.on('requestfailed', (req) => failedRequests.push({ url: req.url().slice(0, 1000), error: req.failure()?.errorText || 'FAILED' }));
+        page.on('dialog', (dialog) => dialog.dismiss().catch(() => {}));
+        page.on('download', (download) => download.cancel().catch(() => {}));
+
+        const response = await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+        assertAllowedPageUrl(page.url(), 'NAVIGATION');
+        return await callback({ page, context, response, viewport, consoleErrors, pageErrors, failedRequests });
+      } catch (error) {
+        lastError = error;
+        if (attempt === 1 && isBrowserLifecycleError(error)) {
+          await closeSharedBrowser();
+          continue;
+        }
+        throw error;
+      } finally {
+        if (context) await context.close().catch(() => {});
+      }
+    }
+    throw lastError || new Error('BROWSER_QA_UNKNOWN_FAILURE');
+  });
+}
+
+function sendEndpointError(res, error) {
+  const message = String(error?.message || error).slice(0, 500);
+  const serviceUnavailable = message.includes('BROWSER_QA_BUSY') || isBrowserLifecycleError(error);
+  res.status(serviceUnavailable ? 503 : 400).json({ error: message });
 }
 
 app.get('/health', async (_req, res) => {
   let browserReady = false;
+  let errorCode = '';
   try {
-    const browser = await chromium.launch({ headless: true });
-    browserReady = true;
-    await browser.close();
-  } catch {}
+    browserReady = await withBrowserSlot(async () => {
+      let context;
+      try {
+        const browser = await getBrowser();
+        if (!browser.isConnected()) return false;
+        context = await browser.newContext({ viewport: { width: 320, height: 240 }, serviceWorkers: 'block' });
+        const page = await context.newPage();
+        await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 5000 });
+        return true;
+      } finally {
+        if (context) await context.close().catch(() => {});
+      }
+    });
+  } catch (error) {
+    errorCode = isBrowserLifecycleError(error) ? 'BROWSER_RUNTIME_UNAVAILABLE' : 'BROWSER_HEALTH_FAILED';
+    await closeSharedBrowser();
+  }
   res.status(browserReady ? 200 : 503).json({
     service: 'simpli-browser-qa',
-    version: '0.2.0',
+    version: '0.3.0',
     browserReady,
+    browserMode: 'SHARED_BROWSER_ISOLATED_CONTEXTS_SERIALIZED',
+    activeJobs,
+    queuedJobs,
+    errorCode,
     targetPolicy: 'SIMPLI_HTTPS_PUBLIC_STOREFRONT_ONLY',
     restrictedPaths: restrictedPathPrefixes
   });
@@ -156,7 +255,7 @@ app.post('/v1/inspect', requireAuth, async (req, res) => {
     });
     res.json(result);
   } catch (error) {
-    res.status(400).json({ error: String(error?.message || error).slice(0, 500) });
+    sendEndpointError(res, error);
   }
 });
 
@@ -182,7 +281,7 @@ app.post('/v1/accessibility', requireAuth, async (req, res) => {
     });
     res.json(result);
   } catch (error) {
-    res.status(400).json({ error: String(error?.message || error).slice(0, 500) });
+    sendEndpointError(res, error);
   }
 });
 
@@ -194,12 +293,22 @@ app.post('/v1/screenshot', requireAuth, async (req, res) => {
     });
     res.type('png').send(png);
   } catch (error) {
-    res.status(400).json({ error: String(error?.message || error).slice(0, 500) });
+    sendEndpointError(res, error);
   }
 });
 
 app.use((_req, res) => res.status(404).json({ error: 'NOT_FOUND' }));
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`simpli-browser-qa listening on ${PORT}`);
 });
+
+async function shutdown(signal) {
+  console.log(`simpli-browser-qa received ${signal}; shutting down`);
+  server.close(() => {});
+  await closeSharedBrowser();
+  process.exit(0);
+}
+
+process.once('SIGTERM', () => { shutdown('SIGTERM').catch(() => process.exit(1)); });
+process.once('SIGINT', () => { shutdown('SIGINT').catch(() => process.exit(1)); });
