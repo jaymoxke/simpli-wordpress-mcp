@@ -15,6 +15,7 @@ import {
   WordPressRequestError,
   type SimpliBackendTool,
 } from "./wordpress.js";
+import { SIMPLI_MCP_VERSION } from "./version.js";
 
 type GatewayScope = "wordpress:read" | "wordpress:write" | "wordpress:dangerous";
 
@@ -117,9 +118,6 @@ function mapLegacyAbilityName(name: string): { abilityName: string; scope: Gatew
 }
 
 function mapLegacyAbilityInput(abilityName: string, args: Record<string, unknown>): Record<string, unknown> {
-  // The legacy core/get-site-info tool supported an optional client-side field filter.
-  // The Simpli v2 source of truth intentionally returns its complete minimal site snapshot,
-  // so the filter is transport-only compatibility metadata and must not reach the backend schema.
   if (abilityName === "wordpress/site-info.get") return {};
   return args;
 }
@@ -184,7 +182,7 @@ async function callCompatibilityTool(
   const mapped = mapLegacyAbilityName(legacyAbilityName);
   if (!mapped) {
     throw new WordPressRequestError(
-      `Legacy MCP tool has no governed Simpli v2 equivalent: ${toolName}`,
+      `Legacy MCP tool has no governed Simpli v3 equivalent: ${toolName}`,
       410,
       { legacyAbilityName },
     );
@@ -218,11 +216,11 @@ export function createMcpServer(
   const browserQa = new BrowserQaClient(config, logger);
   const isWhatsappClient = auth.clientId === WHATSAPP_CLIENT_ID;
   const server = new Server(
-    { name: "simpli-mcp", version: "2.1.0" },
+    { name: "simpli-mcp", version: SIMPLI_MCP_VERSION },
     {
       capabilities: { tools: { listChanged: true } },
       instructions:
-        "Simpli Cosmetics Kenya first-party MCP. Governed abilities may be supplied by the Simpli-owned WordPress backend and the isolated Simpli Browser QA service. Read current state before writes. Tool access does not grant business authority. Browser QA is restricted to Simpli HTTPS targets; interactive browser actions require bounded authority and confirmation. Mutations must satisfy each tool's own authority_ref, confirmation, before-state and rollback controls. Never infer successful production acceptance from a transport-level success response.",
+        "Simpli Cosmetics Kenya first-party MCP. Governed abilities are supplied only by Simpli-owned backends and explicitly admitted services. Read current state before writes. Tool access does not grant business authority. Browser QA is restricted to Simpli HTTPS targets; interactive browser actions require bounded authority and confirmation. Mutations must satisfy each tool's own authority_ref, confirmation, before-state and rollback controls. Never infer successful production acceptance from a transport-level success response.",
     },
   );
 
