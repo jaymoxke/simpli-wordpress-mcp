@@ -37,7 +37,7 @@ jobs:
           php -l wordpress-runtime/lib/first-party-read-core.php
           php -l wordpress-runtime/canary/simpli-mcp-canary-bootstrap.php
       - name: First-party runtime regression
-        run: php tests/php/first-party-read-core.test.php
+        run: php tests/php/verify-first-party-read-core.php
       - name: Build isolated WordPress canary plugin
         run: |
           set -eu
@@ -55,9 +55,7 @@ jobs:
         run: |
           unzip -l simpli-mcp-canary.zip
           unzip -p simpli-mcp-canary.zip simpli-mcp-canary/simpli-mcp-canary-bootstrap.php | grep -F "simpli-mcp-canary/v1"
-          if unzip -p simpli-mcp-canary.zip simpli-mcp-canary/simpli-mcp-canary-bootstrap.php | grep -F "register_route(self::REST_NAMESPACE"; then
-            :
-          fi
+          unzip -p simpli-mcp-canary.zip simpli-mcp-canary/simpli-mcp-canary-bootstrap.php | grep -F "remove_action('rest_api_init'"
       - name: Upload installable canary plugin
         uses: actions/upload-artifact@v4
         with:
