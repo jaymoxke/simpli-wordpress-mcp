@@ -14,6 +14,10 @@ const MODERN_ENVELOPE = {
   "io.modelcontextprotocol/clientCapabilities": {},
 };
 
+const readToolNames = fakeTools
+  .filter((tool) => tool.annotations?.readOnlyHint === true)
+  .map((tool) => tool.name);
+
 const dispatcherTool: SimpliBackendTool = {
   name: "simpli_execute",
   description: "Stable dispatcher for Simpli-owned abilities.",
@@ -128,23 +132,24 @@ describe("Simpli MCP v3 protocol gateway", () => {
     expect(payload.result._meta?.["io.modelcontextprotocol/serverInfo"]?.name).toBe("simpli-mcp");
   });
 
-  it("serves 2026-07-28 tools/list with the per-request envelope", async () => {
+  it("serves 2026-07-28 tools/list with only direct-read tools", async () => {
     const { base, token } = await listen();
     const listed = await modernRpc(base, token, 11, "tools/list");
     expect(listed.status).toBe(200);
     expect(listed.headers.get("mcp-session-id")).toBeNull();
     const payload = await readRpcJson<{ result: { tools: Array<{ name: string }> } }>(listed);
-    expect(payload.result.tools.map((tool) => tool.name)).toEqual(fakeTools.map((tool) => tool.name));
+    expect(payload.result.tools.map((tool) => tool.name)).toEqual(readToolNames);
+    expect(payload.result.tools.some((tool) => tool.name === "simpli_patch_code_file")).toBe(false);
   });
 
-  it("serves stateless legacy tools/list without an MCP session id", async () => {
+  it("serves stateless legacy tools/list without exposing mutation tools", async () => {
     const { base, token } = await listen();
     const listed = await rpc(base, token, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
     expect(listed.status).toBe(200);
     expect(listed.headers.get("mcp-session-id")).toBeNull();
     const payload = await readRpcJson<{ result: { tools: Array<{ name: string }> } }>(listed);
     const names = payload.result.tools.map((tool) => tool.name);
-    expect(names).toEqual(fakeTools.map((tool) => tool.name));
+    expect(names).toEqual(readToolNames);
     expect(names.some((name) => name.toLowerCase().includes("novamira"))).toBe(false);
   });
 
@@ -204,14 +209,14 @@ describe("Simpli MCP v3 protocol gateway", () => {
     expect(payload.result.structuredContent?.version).toBe("0.2.0");
   });
 
-  it("passes plugin-owned write guards through unchanged", async () => {
+  it("blocks a native mutation tool before WordPress even when caller supplies authority-like fields", async () => {
     const { base, token, fake } = await listen();
     const argumentsPayload = {
       file_key: "server",
       expected_sha256: "a".repeat(64),
       old_string: "old",
       new_string: "new",
-      authority_ref: "AI-REL-TEST",
+      authority_ref: "CALLER_CONTROLLED_VALUE",
       _confirm: "RUN simpli_patch_code_file",
     };
     const called = await rpc(base, token, {
@@ -220,19 +225,27 @@ describe("Simpli MCP v3 protocol gateway", () => {
       method: "tools/call",
       params: { name: "simpli_patch_code_file", arguments: argumentsPayload },
     });
-    const payload = await readRpcJson<{ result: { isError?: boolean } }>(called);
-    expect(payload.result.isError).not.toBe(true);
+    const payload = await readRpcJson<{
+      result: {
+        isError?: boolean;
+        structuredContent?: { code?: string; status?: number; mutationExecutionState?: string };
+      };
+    }>(called);
+    expect(payload.result.isError).toBe(true);
+    expect(payload.result.structuredContent).toMatchObject({
+      code: "SIMPLI_AUTHORITY_BROKER_REQUIRED",
+      status: 503,
+      mutationExecutionState: "BLOCKED_UNTIL_AUTHORITY_BRIDGE",
+    });
 
     const forwarded = fake.calls.find((call) => call.body?.method === "tools/call" &&
       (call.body.params as { name?: string } | undefined)?.name === "simpli_patch_code_file");
-    expect(forwarded?.body).toMatchObject({
-      params: { name: "simpli_patch_code_file", arguments: argumentsPayload },
-    });
+    expect(forwarded).toBeUndefined();
   });
 
-  it("routes the verified stale site-info tool through the governed Simpli dispatcher", async () => {
+  it("routes the verified stale read-only site-info tool through the fixed Simpli dispatcher mapping", async () => {
     const { base, token, fake } = await listen([...fakeTools, dispatcherTool]);
-    const legacyArguments = { fields: ["name", "url", "version"] };
+    const legacyArguments = { fields: ["name", "url", "version"], authority_ref: "IGNORED_CALLER_VALUE" };
     const called = await rpc(base, token, {
       jsonrpc: "2.0",
       id: 5,
@@ -253,17 +266,48 @@ describe("Simpli MCP v3 protocol gateway", () => {
         },
       },
     });
+    expect((forwarded?.body?.params as { arguments?: Record<string, unknown> })?.arguments)
+      .not.toHaveProperty("authority_ref");
+  });
+
+  it("blocks a mapped legacy mutation before the dispatcher and ignores caller authority metadata", async () => {
+    const { base, token, fake } = await listen([...fakeTools, dispatcherTool]);
+    const called = await rpc(base, token, {
+      jsonrpc: "2.0",
+      id: 6,
+      method: "tools/call",
+      params: {
+        name: "wp__simpli_edit-product-brand-description",
+        arguments: {
+          product_id: 123,
+          brand_description: "new",
+          authority_ref: "CALLER_CONTROLLED_VALUE",
+          _confirm: "RUN simpli_execute",
+        },
+      },
+    });
+    const payload = await readRpcJson<{
+      result: { isError?: boolean; structuredContent?: { code?: string; status?: number } };
+    }>(called);
+    expect(payload.result.isError).toBe(true);
+    expect(payload.result.structuredContent).toMatchObject({
+      code: "SIMPLI_AUTHORITY_BROKER_REQUIRED",
+      status: 503,
+    });
+    const forwarded = fake.calls.find((call) => call.body?.method === "tools/call" &&
+      (call.body.params as { name?: string } | undefined)?.name === "simpli_execute");
+    expect(forwarded).toBeUndefined();
   });
 
   it("fails closed for stale tools without a verified Simpli equivalent", async () => {
     const { base, token } = await listen([...fakeTools, dispatcherTool]);
     const called = await rpc(base, token, {
       jsonrpc: "2.0",
-      id: 6,
+      id: 7,
       method: "tools/call",
       params: { name: "wp__novamira_execute-php", arguments: { code: "echo 'x';" } },
     });
-    const payload = await readRpcJson<{ result: { isError?: boolean; structuredContent?: { status?: number } } }>(called);
+    const payload = await readRpcJson<{ result: { isError?: boolean; structuredContent?: { status?: number } }>(called);
     expect(payload.result.isError).toBe(true);
     expect(payload.result.structuredContent?.status).toBe(410);
   });
