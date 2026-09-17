@@ -307,7 +307,9 @@ describe("Simpli MCP v3 protocol gateway", () => {
       method: "tools/call",
       params: { name: "wp__novamira_execute-php", arguments: { code: "echo 'x';" } },
     });
-    const payload = await readRpcJson<{ result: { isError?: boolean; structuredContent?: { status?: number } }>(called);
+    const payload = await readRpcJson<{
+      result: { isError?: boolean; structuredContent?: { status?: number } };
+    }>(called);
     expect(payload.result.isError).toBe(true);
     expect(payload.result.structuredContent?.status).toBe(410);
   });
