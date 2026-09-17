@@ -77,6 +77,13 @@ describe("WordPressClient signed transport", () => {
     const headers = new Headers(call?.init?.headers);
     expect(headers.get("authorization")).toMatch(/^Basic /);
     expect(headers.get("x-simpli-key-id")).toBe("gateway-test-key");
+    expect(headers.get("user-agent")).toBe(config.wordpressUserAgent);
+    expect(headers.get("user-agent")).toMatch(/^Mozilla\/5\.0/);
+    expect(headers.get("x-simpli-client")).toMatch(/^simpli-wordpress-mcp\//);
+    expect(headers.get("x-simpli-release-id")).toBeTruthy();
+    expect(call?.init?.redirect).toBe("error");
+    expect(call?.url.origin).toBe(config.wordpressUrl);
+    expect(call?.url.pathname).toBe("/wp-json/simpli-mcp/v1/mcp");
 
     const body = String(call?.init?.body ?? "");
     const attestation = attestationFromHeaders(headers);
@@ -103,5 +110,17 @@ describe("WordPressClient signed transport", () => {
     expect(headers.get("authorization")).toBeNull();
     expect(headers.get("x-simpli-signature")).toBeTruthy();
     expect(headers.get("x-simpli-audience")).toBe("https://wordpress.example.test");
+  });
+
+  it("reports exact origin, redirect rejection and UA posture in readiness", async () => {
+    const fake = makeWordPressFetch();
+    const client = new WordPressClient(testConfig, silentLogger, fake.fetch);
+    const readiness = await client.readiness();
+    expect(readiness).toMatchObject({
+      ready: true,
+      endpointOrigin: "https://wordpress.example.test",
+      redirectPolicy: "reject",
+      userAgentMode: "browser-compatible",
+    });
   });
 });
