@@ -1,5 +1,5 @@
-export const SIMPLI_MCP_VERSION = "3.0.0-rc.4";
-export const SIMPLI_MCP_ARCHITECTURE = "v3-signed-wordpress-runtime";
+export const SIMPLI_MCP_VERSION = "3.0.0-rc.5";
+export const SIMPLI_MCP_ARCHITECTURE = "v3-authority-gate-fail-closed";
 
 function env(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -23,6 +23,11 @@ export interface ReleaseMetadata {
   wordpressSignedTransportContract: "simpli-wp-request-v1";
   wordpressSignedTransportAlgorithm: "Ed25519";
   wordpressTransportCutover: "staged-basic-dual-signed";
+  publicGatewayExecutionCeiling: "A2_PROPOSE";
+  mutationAuthoritySource: "supercomputer-sealed-permit";
+  mutationExecutionState: "BLOCKED_UNTIL_AUTHORITY_BRIDGE";
+  callerSuppliedAuthorityAccepted: false;
+  directBackendWrites: false;
   novamiraGatewayDependency: false;
   wordpressBackendIndependence: "unverified";
 }
@@ -48,6 +53,11 @@ export function releaseMetadata(): ReleaseMetadata {
     wordpressSignedTransportContract: "simpli-wp-request-v1",
     wordpressSignedTransportAlgorithm: "Ed25519",
     wordpressTransportCutover: "staged-basic-dual-signed",
+    publicGatewayExecutionCeiling: "A2_PROPOSE",
+    mutationAuthoritySource: "supercomputer-sealed-permit",
+    mutationExecutionState: "BLOCKED_UNTIL_AUTHORITY_BRIDGE",
+    callerSuppliedAuthorityAccepted: false,
+    directBackendWrites: false,
     novamiraGatewayDependency: false,
     wordpressBackendIndependence: "unverified",
   };
