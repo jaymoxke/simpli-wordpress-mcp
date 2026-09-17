@@ -2,7 +2,7 @@
 
 First-party MCP control plane for Simpli Cosmetics Kenya.
 
-The gateway exposes only Simpli-owned, explicitly admitted WordPress capabilities through OAuth-protected MCP. It does **not** depend on Novamira or Novamira Pro at runtime.
+The **public gateway source** has no direct Novamira or Novamira Pro endpoint/package dependency. Full WordPress-backend independence is a later acceptance gate and is **not yet claimed** by the v3 foundation branch.
 
 ## Current architecture
 
@@ -30,8 +30,8 @@ The `v3-foundation-novamira-free` line exists to complete the clean-room migrati
 
 The foundation requires:
 
-- one canonical release identity across MCP metadata, `/`, `/health`, `/ready`, logs, and `/version`;
-- no Novamira endpoint or package dependency in `src/`;
+- one canonical **runtime** release identity across MCP metadata, `/`, `/health`, `/ready`, logs, and `/version`;
+- no Novamira endpoint or package dependency in gateway `src/`;
 - explicit capability admission rather than automatic exposure of every installed WordPress ability;
 - OAuth and MCP transport owned outside WordPress;
 - deterministic authority checks for writes;
@@ -41,7 +41,7 @@ The foundation requires:
 
 ## Release identity
 
-`src/version.ts` is the canonical application release identity. The same version must be reported by:
+`src/version.ts` is the canonical runtime release identity. The same version must be reported by:
 
 - MCP server metadata;
 - `GET /`;
@@ -58,6 +58,17 @@ SIMPLI_MCP_BUILD_TIMESTAMP
 ```
 
 `GET /version` is intentionally `Cache-Control: no-store` so operators can verify the currently running release.
+
+The foundation metadata distinguishes what is proven from what is not:
+
+```text
+novamiraGatewayDependency: false
+wordpressBackendIndependence: "unverified"
+```
+
+The second value must not be promoted until the backend passes the Novamira-disabled acceptance suite.
+
+Package/lockfile version normalization is intentionally deferred to the dependency/protocol migration tranche so Phase 1 does not mix package-manager churn with the runtime-observability change.
 
 ## Authentication and authorization
 
@@ -83,7 +94,7 @@ simpli_describe
 simpli_execute
 ```
 
-Domain capabilities live behind the Simpli-owned backend and are admitted deliberately. Legacy aliases may be retained temporarily for compatibility, but they route to governed Simpli equivalents and must not reintroduce a third-party runtime dependency.
+Domain capabilities live behind the Simpli-owned backend. The final v3 state requires explicit admission; the foundation branch does not treat backend admission as proven until the backend registry is independently tested. Legacy aliases may be retained temporarily for compatibility, but they must route to governed Simpli equivalents and must not reintroduce a third-party runtime dependency.
 
 Representative domains include:
 
@@ -111,14 +122,14 @@ Representative domains include:
 
 | Endpoint | Meaning |
 | --- | --- |
-| `/health` | Process liveness and canonical release identity |
-| `/ready` | WordPress backend/catalog readiness plus canonical release identity |
-| `/version` | Immutable deployment/release metadata |
+| `/health` | Process liveness and canonical runtime release identity |
+| `/ready` | WordPress backend/catalog readiness plus canonical runtime release identity |
+| `/version` | Runtime deployment/release metadata and current independence evidence state |
 | `/.well-known/oauth-protected-resource` | OAuth protected-resource discovery |
 | `/.well-known/oauth-authorization-server` | Authorization-server metadata |
 | `/mcp` | MCP endpoint |
 
-A successful `/health` response alone does **not** prove WordPress execution readiness.
+A successful `/health` response alone does **not** prove WordPress execution readiness or backend independence.
 
 ## Local verification
 
@@ -131,7 +142,7 @@ npm test
 npm run build
 ```
 
-The test suite includes a regression check that prevents Novamira endpoint/package dependencies from being introduced into `src/`.
+The test suite includes a regression check that prevents direct Novamira endpoint/package dependencies from being introduced into gateway `src/`.
 
 ## Deployment safety
 
@@ -147,7 +158,7 @@ Before a v3 cutover:
 6. rollback is tested;
 7. Novamira can be disabled without changing Simpli MCP readiness or tool availability required for the accepted scope.
 
-See [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) and [docs/V3_MIGRATION.md](docs/V3_MIGRATION.md).
+See [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md), [docs/ARCHITECTURE_V3.md](docs/ARCHITECTURE_V3.md), and [docs/V3_MIGRATION.md](docs/V3_MIGRATION.md).
 
 ## Rollback
 
