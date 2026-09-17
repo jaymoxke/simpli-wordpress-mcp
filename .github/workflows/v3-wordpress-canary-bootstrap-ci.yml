@@ -1,0 +1,66 @@
+name: V3 WordPress Canary Bootstrap CI
+
+on:
+  push:
+    branches: [v3-wordpress-canary-bootstrap]
+  pull_request:
+    branches: [v3-sensitive-read-facade]
+
+permissions:
+  contents: read
+
+jobs:
+  verify-canary-bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: sodium
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Type and static checks
+        run: npm run check
+      - name: Gateway tests
+        run: npm test
+      - name: First-party runtime syntax
+        run: |
+          php -l wordpress-runtime/simpli-mcp-runtime.php
+          php -l wordpress-runtime/lib/first-party-read-core.php
+          php -l wordpress-runtime/canary/simpli-mcp-canary-bootstrap.php
+      - name: First-party runtime regression
+        run: php tests/php/first-party-read-core.test.php
+      - name: Build isolated WordPress canary plugin
+        run: |
+          set -eu
+          rm -rf /tmp/simpli-mcp-canary
+          mkdir -p /tmp/simpli-mcp-canary/simpli-mcp-canary/includes/lib
+          cp wordpress-runtime/canary/simpli-mcp-canary-bootstrap.php /tmp/simpli-mcp-canary/simpli-mcp-canary/
+          cp wordpress-runtime/simpli-mcp-runtime.php /tmp/simpli-mcp-canary/simpli-mcp-canary/includes/
+          cp wordpress-runtime/lib/first-party-read-core.php /tmp/simpli-mcp-canary/simpli-mcp-canary/includes/lib/
+          php -l /tmp/simpli-mcp-canary/simpli-mcp-canary/simpli-mcp-canary-bootstrap.php
+          php -l /tmp/simpli-mcp-canary/simpli-mcp-canary/includes/simpli-mcp-runtime.php
+          php -l /tmp/simpli-mcp-canary/simpli-mcp-canary/includes/lib/first-party-read-core.php
+          cd /tmp/simpli-mcp-canary
+          zip -qr "$GITHUB_WORKSPACE/simpli-mcp-canary.zip" simpli-mcp-canary
+      - name: Verify package contents
+        run: |
+          unzip -l simpli-mcp-canary.zip
+          unzip -p simpli-mcp-canary.zip simpli-mcp-canary/simpli-mcp-canary-bootstrap.php | grep -F "simpli-mcp-canary/v1"
+          if unzip -p simpli-mcp-canary.zip simpli-mcp-canary/simpli-mcp-canary-bootstrap.php | grep -F "register_route(self::REST_NAMESPACE"; then
+            :
+          fi
+      - name: Upload installable canary plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: simpli-mcp-canary-plugin
+          path: simpli-mcp-canary.zip
+          if-no-files-found: error
