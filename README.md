@@ -9,20 +9,21 @@ The **public gateway source** has no direct Novamira or Novamira Pro endpoint/pa
 ```mermaid
 flowchart LR
     C["ChatGPT / Claude / Codex / approved MCP clients"] -->|"OAuth + MCP"| G["Simpli MCP Gateway"]
-    G -->|"fixed-origin authenticated JSON-RPC"| W["Simpli WordPress Runtime"]
+    G -->|"fixed-origin signed JSON-RPC"| W["Simpli WordPress Runtime"]
     W --> WP["WordPress / WooCommerce / governed integrations"]
     G --> B["Simpli Browser QA"]
+    A["Simpli authority service"] -->|"bounded authority / one-use permits"| G
 ```
 
 The public MCP/OAuth surface is owned by Simpli. WordPress is a bounded execution backend, not the public authorization server.
 
-The gateway currently calls the Simpli-owned WordPress backend at:
+The gateway calls the Simpli-owned WordPress backend at:
 
 ```text
 /wp-json/simpli-mcp/v1/mcp
 ```
 
-using MCP-style `tools/list` and `tools/call` JSON-RPC operations. The WordPress origin is fixed in configuration and cannot be selected by an MCP caller.
+using MCP-style `tools/list` and `tools/call` JSON-RPC operations. The WordPress origin and route are fixed in configuration and cannot be selected by an MCP caller.
 
 ## v3 migration status
 
@@ -49,18 +50,9 @@ The v3 program is staged so production remains recoverable while the gateway bec
 
 The public HTTP MCP endpoint uses `createMcpHandler` per request rather than an in-memory server-side MCP session map. It explicitly supports the 2026-07-28 protocol path while retaining the SDK's stateless legacy fallback for older 2025-era clients.
 
-The protocol test suite covers both paths, including:
-
-- 2026-07-28 `server/discover` with the required per-request `_meta` envelope and MCP standard headers;
-- 2026-07-28 `tools/list` without `Mcp-Session-Id`;
-- stateless legacy `tools/list` fallback;
-- OAuth bearer access into the stateless MCP endpoint;
-- the restricted WhatsApp credential;
-- existing governed dispatcher/write guards.
-
 ### Phase 3 — durable OAuth state
 
-`v3-oauth-durable` replaces self-contained shared-secret OAuth grants and process-memory replay state with durable opaque-token state:
+`v3-oauth-durable` replaced self-contained shared-secret OAuth grants and process-memory replay state with durable opaque-token state:
 
 - Node 24 runtime with built-in SQLite;
 - persistent clients, authorization-code state, access-token state, refresh-token families and revocations;
@@ -73,9 +65,45 @@ The protocol test suite covers both paths, including:
 - production requires an absolute persistent `OAUTH_STATE_DB_PATH`;
 - `/ready` includes OAuth state health.
 
-Because the authorization server and MCP resource server are co-located, opaque high-entropy bearer tokens are intentionally used instead of adding JWT/JWKS/key-rotation machinery that would not improve the current trust boundary. Distributed token signing can be added later only if the authorization and resource servers are separated or another verified requirement justifies it.
+Because the authorization server and MCP resource server are co-located, opaque high-entropy bearer tokens are intentionally used instead of adding JWT/JWKS machinery that does not improve this trust boundary.
 
-This phase changes the gateway security model only. It does **not** prove real-client production acceptance, WordPress-backend independence, or Novamira retirement.
+### Phase 4 — signed WordPress transport
+
+`v3-signed-wordpress-runtime` introduces the `simpli-wp-request-v1` machine-transport contract.
+
+The gateway signs the exact outbound request with Ed25519 and binds:
+
+```text
+HTTP method
+fixed route
+WordPress audience/origin
+key ID
+issued-at / expires-at
+one-use nonce
+SHA-256 body digest
+Simpli MCP release ID
+```
+
+The WordPress verifier:
+
+- validates the exact body digest and Ed25519 signature;
+- checks audience, short validity window and bounded clock skew;
+- admits only configured public key IDs;
+- persists nonce hashes and rejects replay in enforcement mode;
+- supports overlapping public verifier keys for controlled key rotation;
+- exposes verified-request state to a future first-party permission callback without treating machine identity as business authority.
+
+The staged transport modes are:
+
+```text
+basic -> dual -> signed
+```
+
+`dual` retains the WordPress Application Password while adding the signature, allowing verification before credential retirement. Production must not jump directly to signed-only mode.
+
+**Transport identity remains separate from execution authority.** A valid Ed25519 request signature does not authorize a price, stock, order, settings or other material mutation. Simpli's A3/A4/A5 authority/permit layer, capability policy, expected-before-state, idempotency and read-back verification remain separate gates. A6 remains blocked.
+
+See [docs/PHASE4_SIGNED_RUNTIME.md](docs/PHASE4_SIGNED_RUNTIME.md).
 
 ## Release identity
 
@@ -95,9 +123,7 @@ SIMPLI_MCP_GIT_SHA
 SIMPLI_MCP_BUILD_TIMESTAMP
 ```
 
-`GET /version` is intentionally `Cache-Control: no-store` so operators can verify the currently running release.
-
-The metadata distinguishes what is proven from what is not:
+The Phase 4 candidate is identified as `3.0.0-rc.4` and explicitly reports the Ed25519 signed-transport contract while keeping:
 
 ```text
 novamiraGatewayDependency: false
@@ -106,9 +132,9 @@ wordpressBackendIndependence: "unverified"
 
 The second value must not be promoted until the backend passes the Novamira-disabled acceptance suite.
 
-## Authentication and authorization
+## Authentication and authority
 
-The current v3 OAuth path uses Authorization Code + PKCE with durable opaque tokens. OAuth scope controls broad client access; business/execution authority is a separate layer and must not be inferred from tool access.
+The current v3 public OAuth path uses Authorization Code + PKCE with durable opaque tokens. OAuth scope controls broad client access; business/execution authority is a separate layer and must not be inferred from tool access.
 
 Current broad scopes are:
 
@@ -120,9 +146,21 @@ Current broad scopes are:
 
 If the client omits `scope`, only `wordpress:read` is granted.
 
-The next security tranche is the **signed WordPress execution contract**: replace broad backend credential trust with exact signed execution envelopes, one-use nonces, idempotency, expected-before-state and mandatory read-back verification.
+The intended mutation chain is:
 
-The v3 migration will progressively replace coarse dangerous access with exact Simpli authority classes and one-use execution permits. A6/irreversible or forbidden operations remain unavailable through normal MCP execution.
+```text
+OAuth identity/scope
+-> Simpli governance decision
+-> exact authority / one-use permit where required
+-> signed machine transport
+-> WordPress capability policy
+-> expected-before-state + idempotency
+-> mutation
+-> read-back verification
+-> audit evidence
+```
+
+The live SuperComputer already has a sealed one-use WordPress authority/attestation model. Phase 4 must align with that authority service rather than create a second independent business-authority issuer in the public gateway.
 
 ## Capability model
 
@@ -134,29 +172,21 @@ simpli_describe
 simpli_execute
 ```
 
-Domain capabilities live behind the Simpli-owned backend. The final v3 state requires explicit admission; backend admission is not treated as proven until the backend registry is independently tested. Legacy aliases may be retained temporarily for compatibility, but they must route to governed Simpli equivalents and must not reintroduce a third-party runtime dependency.
+Domain capabilities live behind the Simpli-owned backend. A capability becomes usable only after explicit admission and policy; installing another WordPress plugin must not automatically expose privileged MCP operations.
 
-Representative domains include:
-
-- WordPress content and media;
-- WooCommerce products, variations, inventory and orders;
-- Rank Math / SEO;
-- storefront-owned components;
-- shipping and POS bridges;
-- forms;
-- performance and maintenance;
-- Browser QA and acceptance checks.
+Normal MCP production must not expose arbitrary PHP, arbitrary WP-CLI, administrator-login generation, generic shell/root execution or unrestricted filesystem mutation.
 
 ## Safety rules
 
 - Read current state before writes.
 - Tool visibility is not business authority.
+- Machine transport identity is not business authority.
 - Reject writes when required authority, confirmation, before-state, schema or idempotency conditions are missing.
 - Do not blindly retry an unknown write outcome; read current state first.
 - Verify material writes by read-back before reporting completion.
-- Keep output bounded and never log credentials or bearer tokens.
+- Keep output bounded and never log credentials, bearer tokens or private keys.
 - Reject redirects from the fixed WordPress origin.
-- Fail closed when policy/catalog/OAuth state readiness is not proven.
+- Fail closed when policy/catalog/OAuth state/readiness is not proven.
 
 ## Health and diagnostics
 
@@ -170,11 +200,11 @@ Representative domains include:
 | `/oauth/revoke` | OAuth token revocation |
 | `/mcp` | Dual-era per-request MCP endpoint |
 
-A successful `/health` response alone does **not** prove OAuth persistence, WordPress execution readiness, backend independence, or real-client production acceptance.
+A successful `/health` response alone does **not** prove OAuth persistence, WordPress execution readiness, signed-transport production acceptance, backend independence or real-client production acceptance.
 
 ## Local verification
 
-Requirements: Node.js 24.
+Requirements: Node.js 24. Phase 4 cross-language verification also uses PHP 8.2+ with libsodium.
 
 ```bash
 npm ci
@@ -183,13 +213,13 @@ npm test
 npm run build
 ```
 
-The test suite includes:
+Phase 4 CI additionally verifies:
 
-- direct Novamira gateway-dependency regression checks;
-- canonical release/readiness metadata checks;
-- 2026-07-28 and stateless legacy MCP protocol checks;
-- OAuth PKCE, authorization-code replay, refresh rotation/reuse containment and revocation tests;
-- restart-persistence tests using a real temporary SQLite database.
+- PHP syntax for the clean-room verifier;
+- Node-to-PHP Ed25519 canonical-message interoperability;
+- tampered-body rejection;
+- signed and dual gateway transport behavior;
+- Node 24 container build.
 
 ## Deployment safety
 
@@ -202,15 +232,17 @@ Before a v3 cutover:
 3. the modern 2026-07-28 MCP path passes real-client acceptance where the client supports it;
 4. the production OAuth database resides on verified persistent storage and restore/recovery has been tested;
 5. `/ready` proves both OAuth state and the Simpli backend catalog are available;
-6. representative reads match production truth;
-7. a representative safe write passes read-before-write and read-back verification;
-8. rollback is tested;
-9. Novamira can be disabled without changing Simpli MCP readiness or tool availability required for the accepted scope.
+6. Phase 4 reaches `dual + observe`, then `dual + enforce`, with positive and negative signed-request evidence;
+7. signed-only WordPress permission handling is explicitly integrated and tested before Basic credentials are revoked;
+8. representative reads match production truth;
+9. a representative safe write passes read-before-write, exact authority and read-back verification;
+10. rollback is tested;
+11. Novamira can be disabled without changing accepted Simpli MCP readiness or capability coverage.
 
-See [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md), [docs/ARCHITECTURE_V3.md](docs/ARCHITECTURE_V3.md), and [docs/V3_MIGRATION.md](docs/V3_MIGRATION.md).
+See [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md), [docs/ARCHITECTURE_V3.md](docs/ARCHITECTURE_V3.md), [docs/V3_MIGRATION.md](docs/V3_MIGRATION.md), and [docs/PHASE4_SIGNED_RUNTIME.md](docs/PHASE4_SIGNED_RUNTIME.md).
 
 ## Rollback
 
-Until final cutover, v3 work remains isolated from production. Rollback is a release/DNS/service decision, not a destructive WordPress migration.
+Until final cutover, v3 work remains isolated from production. Rollback is a release/service/configuration decision, not a destructive WordPress migration.
 
-Do not remove legacy plugins until the accepted v3 capability set is independently verified and an observation period has passed.
+Do not revoke the WordPress Application Password until signed-only acceptance has passed. Do not remove legacy plugins until the accepted first-party capability set is independently verified and the observation period has passed.
