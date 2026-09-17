@@ -1,0 +1,70 @@
+name: V3 Backend Edge Compatibility CI
+
+on:
+  push:
+    branches: [v3-backend-edge-compat]
+  pull_request:
+    branches: [v3-authority-gate-fail-closed]
+
+permissions:
+  contents: write
+
+jobs:
+  verify-backend-edge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: sodium
+      - name: Use pinned npm for deterministic lock generation
+        run: npm install --global npm@11.6.0
+      - name: Generate exact rc.6 dependency lock
+        run: npm install --package-lock-only --no-audit --no-fund
+      - name: Install from generated lock
+        run: npm ci --no-audit --no-fund
+      - name: Type and static checks
+        run: npm run check
+      - name: Tests
+        run: npm test
+      - name: WhatsApp gateway static checks
+        working-directory: whatsapp-gateway
+        run: npm run check
+      - name: WhatsApp gateway tests
+        working-directory: whatsapp-gateway
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Runtime syntax check
+        run: node --check dist/server.js
+      - name: PHP signed transport syntax
+        run: |
+          php -l wordpress-runtime/lib/signed-transport-core.php
+          php -l wordpress-runtime/simpli-mcp-signed-transport.php
+          php -l tests/php/verify-transport-vector.php
+      - name: Cross-language Ed25519 contract regression
+        run: |
+          node scripts/write-transport-test-vector.mjs /tmp/simpli-transport-vector.json
+          php tests/php/verify-transport-vector.php /tmp/simpli-transport-vector.json
+      - name: Container build
+        run: docker build -t simpli-mcp-v3-backend-edge:test .
+      - name: Commit verified dependency lock to edge branch
+        if: github.event_name == 'push'
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo "package-lock.json already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "v3 edge: lock verified rc.6 dependencies [skip ci]"
+          git push origin HEAD:v3-backend-edge-compat
