@@ -20,10 +20,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - name: Install exact manifest dependencies without rewriting stale lock
-        run: npm install --package-lock=false --no-audit --no-fund
+      - name: Install exact manifest dependencies in an isolated dependency graph
+        run: |
+          rm -f package-lock.json
+          npm install --no-audit --no-fund
       - name: Type and static checks
         run: npm run check
       - name: Tests
