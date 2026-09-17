@@ -1,5 +1,5 @@
-export const SIMPLI_MCP_VERSION = "3.0.0-rc.5";
-export const SIMPLI_MCP_ARCHITECTURE = "v3-authority-gate-fail-closed";
+export const SIMPLI_MCP_VERSION = "3.0.0-rc.6";
+export const SIMPLI_MCP_ARCHITECTURE = "v3-backend-edge-compat";
 
 function env(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -23,6 +23,9 @@ export interface ReleaseMetadata {
   wordpressSignedTransportContract: "simpli-wp-request-v1";
   wordpressSignedTransportAlgorithm: "Ed25519";
   wordpressTransportCutover: "staged-basic-dual-signed";
+  wordpressOriginPolicy: "exact-origin-no-redirect";
+  wordpressUserAgentPosture: "browser-compatible-configurable";
+  wordpressIdentityHeader: "X-Simpli-Client";
   publicGatewayExecutionCeiling: "A2_PROPOSE";
   mutationAuthoritySource: "supercomputer-sealed-permit";
   mutationExecutionState: "BLOCKED_UNTIL_AUTHORITY_BRIDGE";
@@ -53,6 +56,9 @@ export function releaseMetadata(): ReleaseMetadata {
     wordpressSignedTransportContract: "simpli-wp-request-v1",
     wordpressSignedTransportAlgorithm: "Ed25519",
     wordpressTransportCutover: "staged-basic-dual-signed",
+    wordpressOriginPolicy: "exact-origin-no-redirect",
+    wordpressUserAgentPosture: "browser-compatible-configurable",
+    wordpressIdentityHeader: "X-Simpli-Client",
     publicGatewayExecutionCeiling: "A2_PROPOSE",
     mutationAuthoritySource: "supercomputer-sealed-permit",
     mutationExecutionState: "BLOCKED_UNTIL_AUTHORITY_BRIDGE",
