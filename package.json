@@ -1,6 +1,6 @@
 {
   "name": "simpli-wordpress-mcp",
-  "version": "3.0.0-rc.6",
+  "version": "3.0.0-rc.7",
   "private": true,
   "description": "First-party Simpli MCP control plane for governed Simpli WordPress operations.",
   "type": "module",
