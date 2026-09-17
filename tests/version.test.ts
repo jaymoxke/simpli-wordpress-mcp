@@ -29,7 +29,7 @@ async function listen(): Promise<string> {
 }
 
 describe("canonical release identity", () => {
-  it("reports one release version consistently without overstating backend independence", async () => {
+  it("reports one release version consistently and exposes the intentional write block", async () => {
     const base = await listen();
 
     const [rootResponse, healthResponse, versionResponse, readyResponse] = await Promise.all([
@@ -50,6 +50,9 @@ describe("canonical release identity", () => {
     const ready = await readyResponse.json() as {
       release?: Record<string, unknown>;
       oauth?: Record<string, unknown>;
+      authority?: Record<string, unknown>;
+      readExecutionReady?: boolean;
+      writeExecutionReady?: boolean;
     };
 
     for (const payload of [root, health, version, ready.release ?? {}]) {
@@ -58,6 +61,11 @@ describe("canonical release identity", () => {
       expect(payload.oauthTokenModel).toBe("opaque-sha256-sqlite");
       expect(payload.oauthRefreshRotation).toBe(true);
       expect(payload.oauthDurableReplayProtection).toBe(true);
+      expect(payload.publicGatewayExecutionCeiling).toBe("A2_PROPOSE");
+      expect(payload.mutationAuthoritySource).toBe("supercomputer-sealed-permit");
+      expect(payload.mutationExecutionState).toBe("BLOCKED_UNTIL_AUTHORITY_BRIDGE");
+      expect(payload.callerSuppliedAuthorityAccepted).toBe(false);
+      expect(payload.directBackendWrites).toBe(false);
       expect(payload.novamiraGatewayDependency).toBe(false);
       expect(payload.wordpressBackendIndependence).toBe("unverified");
     }
@@ -70,6 +78,15 @@ describe("canonical release identity", () => {
       tokenModel: "opaque-sha256",
       refreshRotation: true,
       authorizationCodeReplayProtection: "durable",
+    });
+    expect(ready.readExecutionReady).toBe(true);
+    expect(ready.writeExecutionReady).toBe(false);
+    expect(ready.authority).toMatchObject({
+      executionCeiling: "A2_PROPOSE",
+      mutationAuthoritySource: "supercomputer-sealed-permit",
+      mutationExecutionState: "BLOCKED_UNTIL_AUTHORITY_BRIDGE",
+      directBackendWrites: false,
+      callerSuppliedAuthorityAccepted: false,
     });
     expect(versionResponse.headers.get("cache-control")).toContain("no-store");
   });

@@ -5,14 +5,20 @@ import { requireScope } from "./oauth.js";
 import type { Logger } from "./logger.js";
 import { BrowserQaClient } from "./browser-qa.js";
 import {
+  AuthorityBrokerRequiredError,
+  assertGatewayExecutionAllowed,
+  isReadScope,
+  MUTATION_EXECUTION_STATE,
+  type GatewayExecutionScope,
+} from "./authority-gate.js";
+import {
   WordPressClient,
   WordPressRequestError,
   type SimpliBackendTool,
 } from "./wordpress.js";
 import { SIMPLI_MCP_VERSION } from "./version.js";
 
-type GatewayScope = "wordpress:read" | "wordpress:write" | "wordpress:dangerous";
-
+type GatewayScope = GatewayExecutionScope;
 type BackendOutput = Awaited<ReturnType<WordPressClient["callTool"]>>;
 
 const WHATSAPP_CLIENT_ID = "simpli-whatsapp-intelligence";
@@ -58,7 +64,16 @@ function errorResult(error: unknown, maxBytes: number): CallToolResult {
   const payload =
     error instanceof WordPressRequestError
       ? { error: error.message, status: error.status, details: error.details }
-      : { error: error instanceof Error ? error.message : String(error) };
+      : error instanceof AuthorityBrokerRequiredError
+        ? {
+            error: error.message,
+            code: error.code,
+            status: error.status,
+            operation: error.operation,
+            scope: error.scope,
+            mutationExecutionState: MUTATION_EXECUTION_STATE,
+          }
+        : { error: error instanceof Error ? error.message : String(error) };
   const result = textResult(payload, maxBytes);
   return { ...result, isError: true };
 }
@@ -78,6 +93,11 @@ function requiredScope(tool: SimpliBackendTool): GatewayScope {
   return "wordpress:write";
 }
 
+function authorizeOperation(auth: AuthContext, scope: GatewayScope, operation: string): void {
+  requireScope(auth, scope);
+  assertGatewayExecutionAllowed(scope, operation);
+}
+
 function toMcpTool(tool: SimpliBackendTool): Tool {
   return {
     name: tool.name,
@@ -95,6 +115,7 @@ function toMcpTool(tool: SimpliBackendTool): Tool {
     _meta: {
       "simpli/backend": "wordpress-plugin",
       "simpli/sourceTool": tool.name,
+      "simpli/executionState": "READ_ONLY_DIRECT_PATH",
     },
   };
 }
@@ -128,6 +149,7 @@ function mergeBrowserCatalog(output: BackendOutput, browserQa: BrowserQaClient):
     risk: ability.risk,
     authority_class: ability.authority_class,
     requires_confirmation: ability.requires_confirmation,
+    execution_state: ability.readonly ? "AVAILABLE_READ" : MUTATION_EXECUTION_STATE,
   }));
   return {
     ...output,
@@ -140,6 +162,7 @@ function mergeBrowserCatalog(output: BackendOutput, browserQa: BrowserQaClient):
 
 async function callCompatibilityTool(
   wordpress: WordPressClient,
+  auth: AuthContext,
   toolName: string,
   args: Record<string, unknown>,
 ): Promise<{
@@ -149,6 +172,7 @@ async function callCompatibilityTool(
   abilityName?: string;
 } | null> {
   if (toolName === "wordpress_discover_abilities" || toolName === "wordpress_refresh_ability_catalog") {
+    authorizeOperation(auth, "wordpress:read", toolName);
     return {
       output: await wordpress.callTool("simpli_catalog", {}),
       routedTool: "simpli_catalog",
@@ -157,6 +181,7 @@ async function callCompatibilityTool(
   }
 
   if (toolName === "wordpress_get_ability") {
+    authorizeOperation(auth, "wordpress:read", toolName);
     const name = args.name;
     if (typeof name !== "string" || !name.trim()) {
       throw new WordPressRequestError("Legacy wordpress_get_ability requires name", 400);
@@ -182,17 +207,14 @@ async function callCompatibilityTool(
     );
   }
 
+  authorizeOperation(auth, mapped.scope, mapped.abilityName);
+
   const dispatcherInput: Record<string, unknown> = {
     ability_name: mapped.abilityName,
     input: mapLegacyAbilityInput(mapped.abilityName, args),
   };
-  if (typeof args.authority_ref === "string" && args.authority_ref.trim()) {
-    dispatcherInput.authority_ref = args.authority_ref;
-  }
-  if (typeof args._confirm === "string") {
-    dispatcherInput._confirm = "RUN simpli_execute";
-  }
-
+  // Caller-supplied authority metadata is deliberately not forwarded. Mutation
+  // compatibility paths are blocked above until the trusted authority bridge exists.
   return {
     output: await wordpress.callTool("simpli_execute", dispatcherInput),
     routedTool: "simpli_execute",
@@ -214,16 +236,17 @@ export function createMcpServer(
     {
       capabilities: { tools: { listChanged: true } },
       instructions:
-        "Simpli Cosmetics Kenya first-party MCP. Governed abilities are supplied only by Simpli-owned backends and explicitly admitted services. Read current state before writes. Tool access does not grant business authority. Browser QA is restricted to Simpli HTTPS targets; interactive browser actions require bounded authority and confirmation. Mutations must satisfy each tool's own authority_ref, confirmation, before-state and rollback controls. Never infer successful production acceptance from a transport-level success response.",
+        "Simpli Cosmetics Kenya first-party MCP. Direct public-gateway execution is currently read-only. Mutations fail closed until the existing SuperComputer sealed-permit authority lane is integrated. Tool access, OAuth scope, caller-supplied authority references and valid machine transport signatures do not grant business authority. Read current state before any future write; material mutations require exact authority, idempotency/before-state controls and read-back verification. Never infer production acceptance from transport-level success.",
     },
   );
 
   server.setRequestHandler("tools/list", async () => {
     requireScope(auth, "wordpress:read");
     const tools = await wordpress.listTools();
+    const readOnlyTools = tools.filter((tool) => isReadScope(requiredScope(tool)));
     const visibleTools = isWhatsappClient
-      ? tools.filter((tool) => WHATSAPP_ALLOWED_TOOLS.has(tool.name))
-      : tools;
+      ? readOnlyTools.filter((tool) => WHATSAPP_ALLOWED_TOOLS.has(tool.name))
+      : readOnlyTools;
     return { tools: visibleTools.map(toMcpTool) };
   });
 
@@ -245,7 +268,7 @@ export function createMcpServer(
 
       if (toolName === "simpli_catalog" && browserQa.configured) {
         scope = "wordpress:read";
-        requireScope(auth, scope);
+        authorizeOperation(auth, scope, toolName);
         output = mergeBrowserCatalog(await wordpress.callTool("simpli_catalog", {}), browserQa);
         routedToolName = "simpli_catalog+browser-qa";
       } else if (
@@ -254,7 +277,8 @@ export function createMcpServer(
       ) {
         const ability = browserQa.describe(args.ability_name);
         scope = ability.gateway_scope;
-        requireScope(auth, scope);
+        // Describing a blocked write ability is still a read operation.
+        authorizeOperation(auth, "wordpress:read", `describe:${ability.name}`);
         output = {
           structuredContent: {
             name: ability.name,
@@ -263,6 +287,7 @@ export function createMcpServer(
             risk: ability.risk,
             authority_class: ability.authority_class,
             requires_confirmation: ability.requires_confirmation,
+            execution_state: ability.readonly ? "AVAILABLE_READ" : MUTATION_EXECUTION_STATE,
             input_schema: ability.input_schema,
             output_schema: ability.output_schema,
           },
@@ -274,17 +299,17 @@ export function createMcpServer(
       ) {
         const ability = browserQa.describe(args.ability_name);
         scope = ability.gateway_scope;
-        requireScope(auth, scope);
+        authorizeOperation(auth, scope, ability.name);
         const localInput = asArguments(args.input);
         const execution = await browserQa.execute(
           ability.name,
           localInput,
-          args.authority_ref,
-          args._confirm,
+          undefined,
+          undefined,
         );
         routedToolName = `browser-qa/${ability.name}`;
 
-        logger.info("Simpli Browser QA ability invoked through dispatcher", {
+        logger.info("Simpli Browser QA read ability invoked through dispatcher", {
           toolName,
           routedToolName,
           scope,
@@ -304,15 +329,14 @@ export function createMcpServer(
         try {
           const tool = await wordpress.getTool(toolName);
           scope = requiredScope(tool);
-          requireScope(auth, scope);
+          authorizeOperation(auth, scope, toolName);
           output = await wordpress.callTool(toolName, args);
         } catch (error) {
           if (!(error instanceof WordPressRequestError) || error.status !== 404) throw error;
-          const compatibility = await callCompatibilityTool(wordpress, toolName, args);
+          const compatibility = await callCompatibilityTool(wordpress, auth, toolName, args);
           if (!compatibility) throw error;
           routedToolName = compatibility.routedTool;
           scope = compatibility.scope;
-          requireScope(auth, scope);
           output = compatibility.output;
           logger.info("Legacy MCP tool routed through Simpli compatibility dispatcher", {
             legacyToolName: toolName,
@@ -324,7 +348,7 @@ export function createMcpServer(
         }
       }
 
-      logger.info("Simpli backend tool invoked", {
+      logger.info("Simpli backend read tool invoked", {
         toolName,
         routedToolName,
         scope,

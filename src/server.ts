@@ -4,6 +4,7 @@ import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, type AuthInfo as SdkAuthInfo } from "@modelcontextprotocol/server";
 import type { Request, Response, NextFunction } from "express";
 import helmet from "helmet";
+import { authorityGateStatus } from "./authority-gate.js";
 import { loadConfig, redactConfig, type AppConfig } from "./config.js";
 import { constantTimeEqual } from "./crypto.js";
 import { createLogger, type Logger } from "./logger.js";
@@ -156,6 +157,7 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
       readiness: `${config.publicBaseUrl}/ready`,
       versionEndpoint: `${config.publicBaseUrl}/version`,
       authentication: oauth.enabled ? "OAuth 2.1 + PKCE + durable opaque tokens" : "Static bearer token",
+      authority: authorityGateStatus(),
     });
   });
 
@@ -171,7 +173,8 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
       "Readiness: /ready",
       "Release metadata: /version",
       "",
-      "The gateway exposes Simpli-owned governed backend capabilities and preserves each capability's schema and safety annotations.",
+      "Direct gateway execution is read-only until the existing SuperComputer sealed-permit authority lane is integrated.",
+      "A valid OAuth token or signed WordPress transport does not grant business mutation authority.",
     ].join("\n"));
   });
 
@@ -180,7 +183,7 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
   });
 
   app.get("/version", (_req, res) => {
-    res.set("Cache-Control", "no-store").json(releaseMetadata());
+    res.set("Cache-Control", "no-store").json({ ...releaseMetadata(), authority: authorityGateStatus() });
   });
 
   app.get("/ready", async (_req, res) => {
@@ -191,6 +194,9 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
     res.status(ready ? 200 : 503).json({
       ...wordpressReadiness,
       ready,
+      readExecutionReady: wordpressReadiness.ready,
+      writeExecutionReady: false,
+      authority: authorityGateStatus(),
       oauth: oauthReadiness,
       release: releaseMetadata(),
     });
@@ -235,18 +241,30 @@ export async function startServer(config = loadConfig()): Promise<HttpServer> {
   const logger = createLogger(config);
   const wordpress = new WordPressClient(config, logger);
   const { app, mcpHandler, oauth } = createApp(config, logger, wordpress);
-  logger.info("Starting Simpli WordPress MCP", { ...redactConfig(config), release: releaseMetadata() });
+  logger.info("Starting Simpli WordPress MCP", {
+    ...redactConfig(config),
+    release: releaseMetadata(),
+    authority: authorityGateStatus(),
+  });
 
   const httpServer = createServer(app);
   await new Promise<void>((resolve, reject) => {
     httpServer.once("error", reject);
     httpServer.listen(config.port, "0.0.0.0", () => resolve());
   });
-  logger.info("Simpli WordPress MCP listening", { port: config.port, release: releaseMetadata() });
+  logger.info("Simpli WordPress MCP listening", {
+    port: config.port,
+    release: releaseMetadata(),
+    authority: authorityGateStatus(),
+  });
 
   void wordpress.readiness().then((readiness) => {
     if (readiness.ready) {
-      logger.info("Simpli MCP backend readiness verified", { ...readiness });
+      logger.info("Simpli MCP backend read readiness verified", {
+        ...readiness,
+        writeExecutionReady: false,
+        authority: authorityGateStatus(),
+      });
       return;
     }
     logger.warn("Simpli MCP backend readiness failed", { ...readiness });
