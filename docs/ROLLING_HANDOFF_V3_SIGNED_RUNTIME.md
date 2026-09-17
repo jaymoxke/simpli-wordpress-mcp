@@ -5,6 +5,7 @@ Program: Simpli MCP v3 — Novamira elimination
 Phase: 4 — signed WordPress runtime transport / authority alignment
 Branch: `v3-signed-wordpress-runtime`
 Base: `v3-oauth-durable`
+Draft PR: `#33` — Simpli MCP v3 signed WordPress transport: Ed25519 + replay protection
 Production mutation: **none**
 Novamira production state: **unchanged**
 
@@ -36,30 +37,43 @@ Phase 4 branch contains:
 - release identity `3.0.0-rc.4` / architecture `v3-signed-wordpress-runtime`;
 - migration/security/architecture/acceptance documentation aligned to the three separate trust layers.
 
-The committed dependency lock was automatically regenerated and committed for rc.4 by GitHub Actions. Exact-head CI after the final documentation/handoff commit is still required before repository-level Phase 4 acceptance can be claimed.
+The committed dependency lock was regenerated and committed for rc.4 by GitHub Actions.
+
+CI evidence before this documentation-only closeout commit:
+
+```text
+commit   804352dc86dfcb68260239dd2cd18dc12dc3b10d
+run      35218079096
+job      verify-signed-runtime
+result   SUCCESS
+```
+
+The run passed committed/generated lock installation, type/static checks, tests, WhatsApp checks/tests, build, runtime syntax, PHP signed-transport syntax, Node-to-PHP Ed25519 contract verification and container build.
+
+Because this handoff update itself creates a new repository head, one final exact-head CI pass is still required before repository-level Phase 4 acceptance is frozen.
 
 ## Live SuperComputer evidence retrieved 2026-09-17
 
 `simpli_wordpress_gateway_status()`:
 
 ```text
-state                         BLOCKED
-service                       simpli-wordpress-mcp-cleanroom
-version                       v1.2.1-cleanroom-full-governed-attestation-r1
-machine_identity              READY
-private_key_exported          false
-upstream_contract             UNAVAILABLE
-read_plane_ready              false
-write_plane_ready             false
-admitted_abilities            181
-admitted_write_abilities      69
+state                          BLOCKED
+service                        simpli-wordpress-mcp-cleanroom
+version                        v1.2.1-cleanroom-full-governed-attestation-r1
+machine_identity               READY
+private_key_exported           false
+upstream_contract              UNAVAILABLE
+read_plane_ready               false
+write_plane_ready              false
+admitted_abilities             181
+admitted_write_abilities       69
 authority crypto/public/ledger READY
-authority writes_ready        true
-ability_catalog               UNAVAILABLE
-machine_attestation_bridge    READY
-caller_execution_metadata     BLOCKED
-source                         VERIFIED_SIGNED_PERMIT_ONLY
-A6                             BLOCKED_ALWAYS
+authority writes_ready         true
+ability_catalog                UNAVAILABLE
+machine_attestation_bridge     READY
+caller_execution_metadata      BLOCKED
+source                          VERIFIED_SIGNED_PERMIT_ONLY
+A6                              BLOCKED_ALWAYS
 ```
 
 `simpli_phase3_write_status()`:
@@ -71,11 +85,11 @@ authority_writes_ready        true
 catalog_state                 UNAVAILABLE
 machine_attestation_bridge    READY
 default                       DENY
-A3/A4                          EXACT_SCOPE_ONE_USE_HUMAN_APPROVED
-A5                             DUAL_CONTROL_TARGET_SPECIFIC
-A6                             BLOCKED_ALWAYS
+A3/A4                         EXACT_SCOPE_ONE_USE_HUMAN_APPROVED
+A5                            DUAL_CONTROL_TARGET_SPECIFIC
+A6                            BLOCKED_ALWAYS
 sealed_signature_exposure     false
-blind_retry_after_unknown      false
+blind_retry_after_unknown     false
 ```
 
 The durable idempotency ledger is present on the SuperComputer. No private signing material was retrieved or exposed.
@@ -128,19 +142,21 @@ Rollback before credential retirement is configuration reversal to `dual/basic`.
 
 ## Next executable unit
 
-1. Verify latest exact branch head CI, including container and Node→PHP contract test.
-2. Open a draft Phase 4 PR against `v3-oauth-durable`.
-3. Review the full Phase 4 diff and keep PR draft while real-runtime acceptance is still open.
-4. Inspect the existing SuperComputer/WordPress authority contract through read-only status/code evidence to identify the smallest integration point for signed transport + sealed semantic permits.
-5. Repair the upstream contract/catalog blocker independently; do not try to solve it by weakening authority/security controls.
-6. Only after read-plane readiness returns, plan a reversible verifier deployment in `disabled/observe` mode. No production write in this unit.
+1. Obtain final exact-head CI after this closeout commit and keep PR #33 draft.
+2. Review Phase 4 diff for authority-boundary regressions.
+3. Begin the semantic authority-integration tranche on a separate child branch rather than adding a second authority issuer to the public gateway.
+4. Route or align mutations with the existing SuperComputer sealed-permit model; direct gateway WordPress writes should fail closed until that authority path is proven.
+5. Repair the live upstream contract/catalog blocker independently; do not weaken security controls to make readiness green.
+6. Only after read-plane readiness returns, plan reversible verifier deployment in `disabled/observe` mode. No production write in this unit.
 
 ## Completion language
 
-Repository commits: `ACTION_EXECUTED`.
+Repository code/documentation work: `ACTION_EXECUTED`.
 
 Live gateway/authority status: `EVIDENCE_RETRIEVED`.
 
-Phase 4 overall: `PARTIAL` until exact-head CI plus real WordPress runtime acceptance and rollback evidence are complete.
+Repository Phase 4 candidate: `PARTIAL` pending the final exact-head CI created by this closeout commit.
+
+Real WordPress Phase 4 acceptance: `BLOCKED` by upstream contract/catalog readiness and undeployed verifier.
 
 Novamira elimination: `PARTIAL` / not yet eligible for production retirement.
