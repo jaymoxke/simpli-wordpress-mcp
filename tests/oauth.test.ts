@@ -119,16 +119,17 @@ async function mcpStatus(base: string, accessToken: string): Promise<number> {
 }
 
 describe("OAuth 2.1 durable opaque-token flow", () => {
-  it("supports PKCE, durable one-time codes, rotating refresh tokens and family reuse containment", async () => {
+  it("supports PKCE, dedicated sensitive-read scope, rotating refresh tokens and family reuse containment", async () => {
     const base = await listen();
     const grant = await createAuthorization(
       base,
-      "wordpress:read wordpress:write wordpress:dangerous",
+      "wordpress:read wordpress:sensitive wordpress:write wordpress:dangerous",
     );
     const tokens = await exchangeCode(base, grant);
 
     expect(tokens.access_token).toMatch(/^sat_/);
     expect(tokens.refresh_token).toMatch(/^srt_/);
+    expect(tokens.scope).toContain("wordpress:sensitive");
     expect(tokens.scope).toContain("wordpress:dangerous");
     expect(await mcpStatus(base, tokens.access_token)).toBe(200);
 
@@ -161,6 +162,7 @@ describe("OAuth 2.1 durable opaque-token flow", () => {
     const rotated = await rotatedResponse.json() as { access_token: string; refresh_token: string; scope: string };
     expect(rotated.access_token).not.toBe(tokens.access_token);
     expect(rotated.refresh_token).not.toBe(tokens.refresh_token);
+    expect(rotated.scope).toContain("wordpress:sensitive");
     expect(await mcpStatus(base, rotated.access_token)).toBe(200);
 
     const reused = await fetch(`${base}/oauth/token`, {
@@ -181,11 +183,16 @@ describe("OAuth 2.1 durable opaque-token flow", () => {
     expect(await mcpStatus(base, rotated.access_token)).toBe(401);
   });
 
-  it("defaults omitted scopes to read-only and supports immediate access-token revocation", async () => {
+  it("defaults omitted scopes to ordinary read-only and does not silently grant sensitive access", async () => {
     const base = await listen();
+    const metadata = await fetch(`${base}/.well-known/oauth-protected-resource`);
+    const resource = await metadata.json() as { scopes_supported?: string[] };
+    expect(resource.scopes_supported).toContain("wordpress:sensitive");
+
     const grant = await createAuthorization(base);
     const tokens = await exchangeCode(base, grant);
     expect(tokens.scope).toBe("wordpress:read");
+    expect(tokens.scope).not.toContain("wordpress:sensitive");
     expect(await mcpStatus(base, tokens.access_token)).toBe(200);
 
     const revocation = await fetch(`${base}/oauth/revoke`, {
