@@ -135,9 +135,14 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
   );
 
   app.use("/oauth", createRateLimit({ windowMs: 15 * 60_000, max: 120, keyPrefix: "oauth" }));
+  app.post("/oauth/register", createRateLimit({ windowMs: 15 * 60_000, max: 30, keyPrefix: "oauth-register" }));
   app.post(
     "/oauth/authorize",
     createRateLimit({ windowMs: 15 * 60_000, max: 10, keyPrefix: "oauth-authorize" }),
+  );
+  app.post(
+    "/oauth/client/revoke",
+    createRateLimit({ windowMs: 15 * 60_000, max: 10, keyPrefix: "oauth-client-revoke" }),
   );
   app.use(createOAuthRouter(config, oauth));
 
@@ -150,7 +155,7 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
       health: `${config.publicBaseUrl}/health`,
       readiness: `${config.publicBaseUrl}/ready`,
       versionEndpoint: `${config.publicBaseUrl}/version`,
-      authentication: oauth.enabled ? "OAuth 2.1 with PKCE" : "Static bearer token",
+      authentication: oauth.enabled ? "OAuth 2.1 + PKCE + durable opaque tokens" : "Static bearer token",
     });
   });
 
@@ -161,8 +166,9 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
       `Release: ${SIMPLI_MCP_VERSION}`,
       "MCP endpoint: /mcp (per-request HTTP; modern 2026-07-28 with stateless legacy fallback)",
       "OAuth metadata: /.well-known/oauth-protected-resource",
+      "OAuth token revocation: /oauth/revoke",
       "Liveness: /health",
-      "WordPress readiness: /ready",
+      "Readiness: /ready",
       "Release metadata: /version",
       "",
       "The gateway exposes Simpli-owned governed backend capabilities and preserves each capability's schema and safety annotations.",
@@ -178,8 +184,16 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
   });
 
   app.get("/ready", async (_req, res) => {
-    const readiness = await wordpress.readiness();
-    res.status(readiness.ready ? 200 : 503).json({ ...readiness, release: releaseMetadata() });
+    const wordpressReadiness = await wordpress.readiness();
+    const oauthReadiness = oauth.status();
+    const oauthHealthy = oauthReadiness.healthy !== false;
+    const ready = wordpressReadiness.ready && oauthHealthy;
+    res.status(ready ? 200 : 503).json({
+      ...wordpressReadiness,
+      ready,
+      oauth: oauthReadiness,
+      release: releaseMetadata(),
+    });
   });
 
   const mcpRateLimit = createRateLimit({ windowMs: 60_000, max: 300, keyPrefix: "mcp" });
@@ -214,13 +228,13 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
     if (!res.headersSent) res.status(500).json({ error: "internal_server_error" });
   });
 
-  return { app, mcpHandler };
+  return { app, mcpHandler, oauth };
 }
 
 export async function startServer(config = loadConfig()): Promise<HttpServer> {
   const logger = createLogger(config);
   const wordpress = new WordPressClient(config, logger);
-  const { app, mcpHandler } = createApp(config, logger, wordpress);
+  const { app, mcpHandler, oauth } = createApp(config, logger, wordpress);
   logger.info("Starting Simpli WordPress MCP", { ...redactConfig(config), release: releaseMetadata() });
 
   const httpServer = createServer(app);
@@ -248,6 +262,13 @@ export async function startServer(config = loadConfig()): Promise<HttpServer> {
       await mcpHandler.close();
     } catch (error) {
       logger.warn("MCP handler close failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    try {
+      oauth.close();
+    } catch (error) {
+      logger.warn("OAuth state close failed", {
         error: error instanceof Error ? error.message : String(error),
       });
     }
