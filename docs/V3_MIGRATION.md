@@ -2,118 +2,161 @@
 
 ## Objective
 
-Replace all runtime dependency on Novamira/Novamira Pro with a first-party Simpli MCP control plane while preserving only useful architectural ideas through clean-room implementation.
+Replace runtime dependency on Novamira/Novamira Pro with a first-party Simpli MCP control plane while preserving useful architectural ideas through clean-room implementation.
 
 The target state is a stable public MCP/OAuth edge owned by Simpli, a bounded Simpli-owned WordPress runtime, and deterministic authority/verification controls between AI clients and production mutations.
 
 ## Non-negotiable design rules
 
 1. WordPress is an execution backend, not the public OAuth/MCP authority surface.
-2. MCP/OAuth remains available even when WordPress is unavailable; readiness must fail closed when backend execution is unavailable.
-3. Tool visibility is not business authority.
-4. Capabilities are explicitly admitted; installing a plugin must never automatically expose privileged AI operations.
-5. No normal MCP surface exposes arbitrary PHP, arbitrary WP-CLI, administrator-login generation, or unrestricted filesystem mutation.
-6. Material writes require read-before-write, bounded authority, idempotency, read-back verification and recoverability where practical.
-7. Unknown write outcomes are inspected before retry.
-8. Novamira source code is not copied into the Simpli implementation. Useful concepts are reimplemented from requirements and observed behaviour.
-9. Production remains on the known-good path until acceptance evidence is complete.
+2. MCP/OAuth remains available if WordPress is unavailable; execution readiness fails closed.
+3. OAuth identity, signed machine transport and business execution authority are separate layers.
+4. Tool visibility is not business authority.
+5. Capabilities are explicitly admitted; installing a plugin must never automatically expose privileged AI operations.
+6. No normal MCP surface exposes arbitrary PHP, arbitrary WP-CLI, administrator-login generation or unrestricted filesystem mutation.
+7. Material writes require read-before-write, bounded authority, idempotency, read-back verification and recoverability where practical.
+8. Unknown write outcomes are inspected before retry.
+9. Novamira source code is not copied into the Simpli implementation. Useful concepts are reimplemented from requirements and observed behavior.
+10. Production remains on the known-good path until acceptance evidence is complete.
 
-## What is retained conceptually
-
-Useful patterns to preserve through Simpli-owned implementation:
+## Useful patterns retained conceptually
 
 - OAuth protected-resource discovery;
 - Authorization Code + PKCE;
-- short-lived access credentials;
-- scoped access;
-- JSON Schema inputs and outputs;
-- read-only/destructive/idempotent/open-world annotations;
+- scoped access and durable revocation;
+- JSON Schema inputs/outputs and safety annotations;
 - modular capability registration;
-- self-diagnostics and readiness;
-- pending/reviewable change workflows where they materially reduce risk;
-- fail-closed permission and schema validation.
+- self-diagnostics/readiness;
+- pending/reviewable change workflows where they reduce risk;
+- fail-closed permission, schema and authority validation.
 
-## What is deliberately not retained
+## Deliberately not retained
 
 - third-party runtime dependency;
 - WordPress-hosted public OAuth as the required client path;
-- arbitrary PHP execution;
-- arbitrary WP-CLI execution;
-- unrestricted file editing/traversal;
+- arbitrary PHP/WP-CLI/file editing;
 - temporary administrator login links;
 - automatic exposure of every installed ability;
 - one broad permission treated as authority for all production actions.
 
-## Current verified repository baseline
-
-The current TypeScript gateway already calls the Simpli-owned WordPress backend at:
-
-```text
-/wp-json/simpli-mcp/v1/mcp
-```
-
-using `tools/list` and `tools/call` JSON-RPC requests. This is the foundation for removing the remaining legacy assumptions rather than rebuilding the public gateway from zero.
-
-The v3 foundation branch is:
+## Repository migration chain
 
 ```text
 v3-foundation-novamira-free
+  -> v3-protocol-mcp-v2
+  -> v3-oauth-durable
+  -> v3-signed-wordpress-runtime
 ```
 
-Production `main` remains unchanged until a reviewed merge and separate deployment decision.
+Production `main` is not changed merely because an isolated phase branch builds.
 
-## Migration phases
+## Phase 0 — freeze legacy growth
 
-### Phase 0 - Freeze legacy growth
+- no new Novamira-dependent capability;
+- Novamira/Pro treated as rollback-only dependencies during migration;
+- migrate capabilities by actual business value/risk, not numeric parity.
 
-- Do not add new Novamira-dependent capabilities.
-- Treat Novamira/Pro as rollback-only legacy dependencies during migration.
-- Inventory actual capabilities needed by current workflows.
+## Phase 1 — foundation
 
-**Done when:** no new feature requires a Novamira namespace or route.
+Implemented on `v3-foundation-novamira-free`:
 
-### Phase 1 - v3 foundation
+- canonical runtime release identity and `/version`;
+- public gateway source free of direct Novamira route/package dependency;
+- acceptance, architecture, security and rollback records;
+- regression checks preventing direct Novamira gateway dependency.
 
-- establish one canonical release identity;
-- expose `/version`;
-- eliminate Novamira-centric documentation;
-- add regression tests preventing Novamira runtime endpoint/package dependencies;
-- define final acceptance and rollback gates;
-- retain current transport/auth compatibility while changing no production state.
+Repository/CI evidence exists. Production acceptance remains separate.
 
-**Done when:** CI passes on the isolated branch and the branch can build without introducing production changes.
+## Phase 2 — protocol modernization
 
-### Phase 2 - protocol modernization
+Implemented on `v3-protocol-mcp-v2`:
 
-- migrate from the v1 SDK compatibility line to the current stable MCP v2 packages;
-- support the current protocol revision required by production clients;
-- remove protocol-state assumptions no longer required by the current spec;
-- preserve compatibility only where real clients still require it;
-- run official/conformance tests where applicable.
+- stable MCP TypeScript SDK v2 split packages;
+- per-request HTTP handling;
+- explicit 2026-07-28 protocol support;
+- stateless legacy fallback;
+- removal of gateway MCP session-map dependency;
+- protocol/auth/WhatsApp compatibility tests.
 
-**Done when:** target clients connect and the compatibility matrix is verified.
+Branch CI is verified. Real-client production acceptance remains a later gate.
 
-### Phase 3 - OAuth durability and key management
+## Phase 3 — durable OAuth
 
-Replace process-memory and shared-secret security state with durable, rotatable controls:
+Implemented on `v3-oauth-durable`:
 
-- durable authorization-code replay prevention;
-- asymmetric signing;
-- key IDs and JWKS;
-- signing-key rotation;
-- refresh-token rotation;
-- refresh-token-family reuse detection;
-- durable client/token revocation;
-- exact audience/resource/issuer enforcement;
-- current preferred client-registration mechanism with compatibility fallback where required.
+- Node 24 + SQLite durable security state;
+- high-entropy opaque OAuth bearer tokens stored only as SHA-256 hashes;
+- durable one-time authorization-code consumption;
+- refresh-token rotation and family-reuse containment;
+- durable access-token/client revocation;
+- restart-persistence tests;
+- production requirement for a persistent absolute OAuth DB path.
 
-**Done when:** replay/revocation/rotation tests survive process restart.
+The OAuth/resource server is currently co-located, so JWT/JWKS was deliberately not introduced. An asymmetric OAuth token-signing layer is not required unless the architecture later needs distributed token verification.
 
-### Phase 4 - signed WordPress runtime contract
+Branch CI is verified. Actual production persistence/restore and real-client acceptance remain open.
 
-Replace broad backend credential trust with a bounded signed execution envelope.
+## Phase 4 — signed WordPress transport and authority alignment
 
-Each mutating request should bind at least:
+Current implementation branch: `v3-signed-wordpress-runtime`.
+
+### 4A. Machine transport contract
+
+Implemented candidate contract `simpli-wp-request-v1`:
+
+- Ed25519 detached signature;
+- fixed WordPress origin and route;
+- exact body SHA-256 binding;
+- key ID;
+- issued/expiry timestamps;
+- one-use nonce;
+- Simpli MCP release ID;
+- short bounded lifetime;
+- TypeScript signer + PHP/libsodium verifier;
+- durable WordPress nonce-claim table in enforce mode;
+- overlapping public verifier keys for safe rotation;
+- Node-to-PHP cross-language verification test.
+
+Gateway rollout modes:
+
+```text
+basic -> dual -> signed
+```
+
+WordPress verifier modes:
+
+```text
+disabled -> observe -> enforce
+```
+
+### 4B. Signed-only WordPress route permission
+
+Still required before Application Password retirement:
+
+- install first-party verifier safely;
+- prove `dual + observe`;
+- prove `dual + enforce` including negative cases;
+- make the first-party WordPress route permission callback accept only the verifier's per-request machine-identity state when using signed-only mode;
+- prove representative reads;
+- preserve Basic rollback until signed-only acceptance completes.
+
+A valid machine signature is not business authority.
+
+### 4C. Semantic execution authority
+
+Do **not** create a second competing authority issuer inside the public gateway.
+
+Current SuperComputer evidence already shows a stronger authority lane with:
+
+- sealed one-use authority;
+- A3/A4/A5 policy and A6 hard block;
+- durable idempotency;
+- machine-attestation bridge;
+- caller-supplied execution metadata blocked.
+
+Phase 4 semantic mutation work should align the first-party WordPress runtime with that existing authority service and bind the exact operation/target/state, rather than infer authority from OAuth scope or the transport signature.
+
+Target semantic fields include, as applicable:
 
 ```text
 ability
@@ -121,107 +164,103 @@ object_ref
 authority_class
 issued_at
 expires_at
-nonce
+one-use permit / nonce
 idempotency_key
 expected_before_state
-payload_hash
+payload_digest
 policy_digest
 release_id
-signature
+verification_read
 ```
 
-The private execution key remains outside WordPress. WordPress stores only the corresponding verification key/material needed to validate requests.
+### Phase 4 done criteria
 
-**Done when:** unsigned, expired, replayed, wrong-before-state and unauthorized requests fail closed.
+Phase 4 is not complete until:
 
-### Phase 5 - explicit capability admission
+- exact-head branch CI passes;
+- cross-language signature verification passes;
+- WordPress observe/enforce behavior is tested on the real first-party runtime;
+- replay/expired/tampered/wrong-audience/unknown-key requests fail closed in enforcement;
+- signed-only route permission works without a WordPress Application Password;
+- the SuperComputer authority lane remains the authoritative mutation gate;
+- a bounded representative write passes authority, before-state/idempotency and read-back verification;
+- rollback is demonstrated.
 
-Move from broad dynamic exposure to an allowlisted capability registry.
+## Phase 5 — explicit capability admission
 
-Admission requires:
+Move from broad/dynamic exposure to a first-party allowlisted registry.
 
-1. Simpli-owned implementation;
-2. input/output schema;
-3. explicit authority class;
-4. read/write/destructive/idempotent annotations;
-5. tests;
-6. verification contract;
-7. rollback/recovery rule where applicable;
-8. registry approval.
+Admission requires Simpli-owned implementation, schemas, authority class, annotations, tests, verification contract, recovery rule and explicit registry admission.
 
-**Done when:** installing unrelated WordPress code cannot create a new MCP-visible privileged tool.
+**Done when:** unrelated WordPress code installation cannot create a new MCP-visible privileged tool.
 
-### Phase 6 - capability migration
+## Phase 6 — capability migration
 
-Port capabilities in commercial-value/risk order:
+Port in business-value/risk order:
 
 1. read-only product/catalog/store state;
-2. WooCommerce bounded product/variation/inventory writes;
-3. Rank Math/SEO writes;
+2. bounded WooCommerce product/variation/inventory writes;
+3. Rank Math/SEO;
 4. storefront-owned components;
-5. shipping and POS bridge operations;
-6. forms and other business integrations;
-7. bounded maintenance/repair operations;
-8. only then any remaining legacy capability shown by real usage evidence to be necessary.
+5. shipping/POS bridge;
+6. forms/business integrations;
+7. bounded maintenance/repair;
+8. only remaining capabilities justified by actual workflow evidence.
 
-Do not port legacy power merely to achieve numeric parity.
+Do not port legacy power to achieve tool-count parity.
 
-**Done when:** the accepted business workflow set has first-party equivalents and no accepted workflow needs Novamira.
+## Phase 7 — shadow verification
 
-### Phase 7 - shadow verification
+- compare first-party reads with authoritative WordPress truth;
+- use disposable/sandbox objects for write acceptance;
+- never duplicate the same production mutation through two paths;
+- run real-client OAuth/MCP acceptance;
+- prove rollback.
 
-- compare first-party reads against authoritative WordPress truth;
-- use disposable/sandbox objects for write tests;
-- never duplicate the same production mutation through both legacy and v3 paths;
-- verify rollback;
-- run real-client OAuth/MCP tests.
+## Phase 8 — production cutover
 
-**Done when:** the acceptance suite has evidence, not only transport success.
+- deploy accepted v3 release;
+- verify `/version`, `/health`, `/ready`;
+- run read-only smoke suite;
+- run one bounded representative write + read-back;
+- monitor errors, latency, authority failures and backend readiness;
+- maintain rollback through the observation window.
 
-### Phase 8 - production cutover
-
-- deploy the accepted v3 release;
-- confirm `/version`, `/health`, `/ready`;
-- run read-only smoke tests;
-- run one bounded representative write and read-back verification;
-- monitor error rate, latency, authority failures and backend readiness.
-
-**Done when:** the agreed observation window completes without an unresolved material defect.
-
-### Phase 9 - Novamira retirement
+## Phase 9 — Novamira retirement
 
 - disable Novamira Core and Pro;
-- re-run the accepted workflow suite;
-- verify no client, skill, automation or backend route calls a Novamira endpoint;
-- retain rollback through the observation window;
-- remove legacy plugins only after the dependency check remains clean.
+- re-run accepted workflow suite;
+- verify no client/skill/automation/backend route depends on Novamira;
+- maintain rollback during observation;
+- remove legacy plugins only after dependency checks stay clean.
 
 ## Rollback strategy
 
-Until Phase 9 closes, every production migration step must preserve a known-good rollback target.
+Every production migration step must preserve a known-good target until final retirement. Prefer release/service/configuration/DNS reversal over emergency WordPress modification.
 
-Rollback should prefer release/service/DNS reversal over emergency WordPress modification. Do not delete legacy plugins merely because the new gateway connects successfully.
+During Phase 4, retain Basic transport until signed-only acceptance passes. During Novamira retirement, retain re-enable/restore capability through the observation window.
 
 ## Evidence required for completion claims
 
-A phase is not complete because code was written or a CI job passed. Depending on the phase, completion evidence includes:
+A phase is not complete because code exists or CI is green. Depending on the phase, completion evidence includes:
 
-- commit SHA;
-- CI/build/test result;
+- exact commit SHA and CI result;
 - runtime `/version` read-back;
-- OAuth protocol test;
-- backend readiness read-back;
-- tool catalog evidence;
-- representative operation evidence;
-- before/after state;
+- OAuth protocol/client acceptance;
+- backend readiness and catalog evidence;
+- signed-transport positive/negative evidence;
+- capability/authority evidence;
+- representative operation before/after state;
 - idempotency/replay evidence;
 - rollback evidence;
 - dependency scan.
 
-## Immediate implementation order
+## Current execution order
 
-1. Complete Phase 1 on the isolated branch.
-2. Open a draft PR to trigger CI and obtain reviewable diff/evidence.
-3. Repair any CI failure before merging.
-4. Keep production unchanged.
-5. Begin Phase 2 only after the Phase 1 branch is verified.
+1. close Phase 4 repository/CI candidate with exact-head evidence;
+2. integrate/verify signed transport against the first-party WordPress runtime without removing Basic rollback;
+3. align semantic write authority with the existing SuperComputer sealed-permit model;
+4. repair the current live upstream contract/catalog blocker independently;
+5. proceed to explicit capability admission and business-priority capability migration;
+6. perform real-client/shadow acceptance before production cutover;
+7. retire Novamira only after the complete accepted workflow set remains healthy with it disabled.
