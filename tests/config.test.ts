@@ -18,6 +18,7 @@ describe("loadConfig", () => {
     expect(config.publicBaseUrl).toBe("https://mcp.example.test");
     expect(config.resourceUrl).toBe("https://mcp.example.test/mcp");
     expect(config.wordpressUrl).toBe("https://wordpress.example.test");
+    expect(config.wordpressAuthMode).toBe("basic");
     expect(config.oauthStateDbPath).toBe(":memory:");
   });
 
@@ -54,6 +55,53 @@ describe("loadConfig", () => {
       OAUTH_STATE_DB_PATH: "/var/lib/simpli-mcp/oauth.sqlite",
     });
     expect(config.oauthStateDbPath).toBe("/var/lib/simpli-mcp/oauth.sqlite");
+  });
+
+  it("supports signed WordPress transport without a Basic credential", () => {
+    const config = loadConfig({
+      PUBLIC_BASE_URL: base.PUBLIC_BASE_URL,
+      WORDPRESS_URL: base.WORDPRESS_URL,
+      WORDPRESS_AUTH_MODE: "signed",
+      WORDPRESS_SIGNING_KEY_ID: "gateway-key-r1",
+      WORDPRESS_SIGNING_PRIVATE_KEY_PATH: "/tmp/test-ed25519.pem",
+      MCP_STATIC_TOKEN: "s".repeat(48),
+    });
+    expect(config.wordpressAuthMode).toBe("signed");
+    expect(config.wordpressUsername).toBeUndefined();
+    expect(config.wordpressAppPassword).toBeUndefined();
+    expect(config.wordpressSigningKeyId).toBe("gateway-key-r1");
+  });
+
+  it("requires both Basic and signing material in dual mode", () => {
+    expect(() => loadConfig({
+      PUBLIC_BASE_URL: base.PUBLIC_BASE_URL,
+      WORDPRESS_URL: base.WORDPRESS_URL,
+      WORDPRESS_AUTH_MODE: "dual",
+      WORDPRESS_USERNAME: base.WORDPRESS_USERNAME,
+      WORDPRESS_APP_PASSWORD: base.WORDPRESS_APP_PASSWORD,
+      MCP_STATIC_TOKEN: "s".repeat(48),
+    })).toThrow(/SIGNING_KEY_ID/);
+
+    const config = loadConfig({
+      ...base,
+      WORDPRESS_AUTH_MODE: "dual",
+      WORDPRESS_SIGNING_KEY_ID: "gateway-key-r1",
+      WORDPRESS_SIGNING_PRIVATE_KEY_PATH: "/tmp/test-ed25519.pem",
+      MCP_STATIC_TOKEN: "s".repeat(48),
+    });
+    expect(config.wordpressAuthMode).toBe("dual");
+  });
+
+  it("requires an absolute signing key path in production", () => {
+    expect(() => loadConfig({
+      PUBLIC_BASE_URL: base.PUBLIC_BASE_URL,
+      WORDPRESS_URL: base.WORDPRESS_URL,
+      WORDPRESS_AUTH_MODE: "signed",
+      WORDPRESS_SIGNING_KEY_ID: "gateway-key-r1",
+      WORDPRESS_SIGNING_PRIVATE_KEY_PATH: "relative/private.pem",
+      MCP_STATIC_TOKEN: "s".repeat(48),
+      NODE_ENV: "production",
+    })).toThrow(/SIGNING_PRIVATE_KEY_PATH must be an absolute path/);
   });
 
   it("rejects insecure public origins", () => {

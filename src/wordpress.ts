@@ -1,5 +1,7 @@
 import type { AppConfig } from "./config.js";
+import { WordPressRequestSigner } from "./execution-auth.js";
 import type { Logger } from "./logger.js";
+import { releaseMetadata } from "./version.js";
 
 export interface JsonSchema {
   type?: string | string[];
@@ -69,6 +71,7 @@ export interface ReadinessResult {
   ready: boolean;
   toolCount: number;
   backend: "simpli-mcp";
+  transportAuthMode: AppConfig["wordpressAuthMode"];
   backendVersion?: string;
   lastRefresh?: string;
   error?: string;
@@ -117,6 +120,7 @@ export class WordPressClient {
   private readinessCache?: { result: ReadinessResult; checkedAt: number };
   private readinessPromise: Promise<ReadinessResult> | undefined;
   private readonly endpoint: URL;
+  private readonly signer?: WordPressRequestSigner;
 
   constructor(
     private readonly config: AppConfig,
@@ -124,6 +128,17 @@ export class WordPressClient {
     private readonly fetchImpl: typeof fetch = fetch,
   ) {
     this.endpoint = new URL(`${config.wordpressUrl}/wp-json/simpli-mcp/v1/mcp`);
+    if (config.wordpressAuthMode === "signed" || config.wordpressAuthMode === "dual") {
+      if (!(config.wordpressSigningKeyId && config.wordpressSigningPrivateKeyPath)) {
+        throw new Error("Signed WordPress transport is configured without signing key material");
+      }
+      this.signer = new WordPressRequestSigner(
+        config.wordpressSigningKeyId,
+        config.wordpressSigningPrivateKeyPath,
+        config.wordpressSigningTtlSeconds,
+        releaseMetadata().releaseId,
+      );
+    }
   }
 
   async getToolSnapshot(force = false): Promise<ToolSnapshot> {
@@ -257,6 +272,7 @@ export class WordPressClient {
         ready: snapshot.tools.length > 0,
         toolCount: snapshot.tools.length,
         backend: "simpli-mcp",
+        transportAuthMode: this.config.wordpressAuthMode,
         ...(backendVersion ? { backendVersion } : {}),
         lastRefresh: snapshot.refreshedAt,
       };
@@ -265,31 +281,50 @@ export class WordPressClient {
         ready: false,
         toolCount: this.cache?.tools.length ?? 0,
         backend: "simpli-mcp",
+        transportAuthMode: this.config.wordpressAuthMode,
         error: error instanceof Error ? error.message : String(error),
       };
     }
   }
 
   private async rpc<T>(method: string, params: Record<string, unknown>): Promise<T> {
-    const id = `railway-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const id = `gateway-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const payload = { jsonrpc: "2.0", id, method, params };
+    const body = JSON.stringify(payload);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.config.wordpressTimeoutMs);
-    const authorization = Buffer.from(
-      `${this.config.wordpressUsername}:${this.config.wordpressAppPassword}`,
-      "utf8",
-    ).toString("base64");
+
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "User-Agent": "Simpli-MCP-Gateway/3.0",
+    };
+
+    if (this.config.wordpressAuthMode === "basic" || this.config.wordpressAuthMode === "dual") {
+      if (!(this.config.wordpressUsername && this.config.wordpressAppPassword)) {
+        throw new WordPressRequestError("WordPress Basic authentication is not configured", 500);
+      }
+      const authorization = Buffer.from(
+        `${this.config.wordpressUsername}:${this.config.wordpressAppPassword}`,
+        "utf8",
+      ).toString("base64");
+      headers.Authorization = `Basic ${authorization}`;
+    }
+
+    if (this.signer) {
+      Object.assign(headers, this.signer.sign({
+        method: "POST",
+        path: this.endpoint.pathname,
+        audience: this.endpoint.origin,
+        body,
+      }).headers);
+    }
 
     try {
       const response = await this.fetchImpl(this.endpoint, {
         method: "POST",
-        headers: {
-          Authorization: `Basic ${authorization}`,
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          "User-Agent": "Simpli-MCP-Railway/2.0",
-        },
-        body: JSON.stringify(payload),
+        headers,
+        body,
         signal: controller.signal,
         redirect: "error",
       });
