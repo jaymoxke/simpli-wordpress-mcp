@@ -17,7 +17,6 @@ interface RateRecord {
   resetAt: number;
 }
 
-const MCP_MAX_BODY_BYTES = 2 * 1024 * 1024;
 const WHATSAPP_CLIENT_ID = "simpli-whatsapp-intelligence";
 
 function createRateLimit(options: { windowMs: number; max: number; keyPrefix: string }) {
@@ -198,12 +197,10 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
     {
       legacy: "stateless",
       responseMode: "auto",
-      maxRequestBodySize: MCP_MAX_BODY_BYTES,
       onerror: (error) => logger.warn("MCP handler error", { error: error.message }),
     },
   );
   const nodeMcpHandler = toNodeHandler(mcpHandler, {
-    maxRequestBodySize: MCP_MAX_BODY_BYTES,
     onerror: (error) => logger.warn("MCP Node adapter error", { error: error.message }),
   });
 
