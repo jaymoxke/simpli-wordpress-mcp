@@ -72,6 +72,9 @@ export interface ReadinessResult {
   toolCount: number;
   backend: "simpli-mcp";
   transportAuthMode: AppConfig["wordpressAuthMode"];
+  endpointOrigin: string;
+  redirectPolicy: "reject";
+  userAgentMode: "browser-compatible" | "custom";
   backendVersion?: string;
   lastRefresh?: string;
   error?: string;
@@ -127,7 +130,10 @@ export class WordPressClient {
     private readonly logger: Logger,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {
-    this.endpoint = new URL(`${config.wordpressUrl}/wp-json/simpli-mcp/v1/mcp`);
+    this.endpoint = new URL("/wp-json/simpli-mcp/v1/mcp", `${config.wordpressUrl}/`);
+    if (this.endpoint.origin !== config.wordpressUrl) {
+      throw new Error("WordPress MCP endpoint origin does not match configured WORDPRESS_URL");
+    }
     if (config.wordpressAuthMode === "signed" || config.wordpressAuthMode === "dual") {
       if (!(config.wordpressSigningKeyId && config.wordpressSigningPrivateKeyPath)) {
         throw new Error("Signed WordPress transport is configured without signing key material");
@@ -139,6 +145,14 @@ export class WordPressClient {
         releaseMetadata().releaseId,
       );
     }
+  }
+
+  private transportMetadata(): Pick<ReadinessResult, "endpointOrigin" | "redirectPolicy" | "userAgentMode"> {
+    return {
+      endpointOrigin: this.endpoint.origin,
+      redirectPolicy: "reject",
+      userAgentMode: this.config.wordpressUserAgent.startsWith("Mozilla/5.0") ? "browser-compatible" : "custom",
+    };
   }
 
   async getToolSnapshot(force = false): Promise<ToolSnapshot> {
@@ -153,8 +167,6 @@ export class WordPressClient {
     };
   }
 
-  // Compatibility for the existing server startup hook while the gateway migrates
-  // from the old Abilities vocabulary to the Simpli-owned tool vocabulary.
   async getAbilitySnapshot(force = false): Promise<ToolSnapshot> {
     return this.getToolSnapshot(force);
   }
@@ -184,6 +196,7 @@ export class WordPressClient {
         this.logger.info("Simpli MCP backend tool catalog refreshed", {
           toolCount: unique.length,
           tools: unique.map((tool) => tool.name),
+          endpointOrigin: this.endpoint.origin,
         });
         return unique;
       })
@@ -273,6 +286,7 @@ export class WordPressClient {
         toolCount: snapshot.tools.length,
         backend: "simpli-mcp",
         transportAuthMode: this.config.wordpressAuthMode,
+        ...this.transportMetadata(),
         ...(backendVersion ? { backendVersion } : {}),
         lastRefresh: snapshot.refreshedAt,
       };
@@ -282,6 +296,7 @@ export class WordPressClient {
         toolCount: this.cache?.tools.length ?? 0,
         backend: "simpli-mcp",
         transportAuthMode: this.config.wordpressAuthMode,
+        ...this.transportMetadata(),
         error: error instanceof Error ? error.message : String(error),
       };
     }
@@ -293,11 +308,16 @@ export class WordPressClient {
     const body = JSON.stringify(payload);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.config.wordpressTimeoutMs);
+    const release = releaseMetadata();
 
     const headers: Record<string, string> = {
       Accept: "application/json",
       "Content-Type": "application/json",
-      "User-Agent": "Simpli-MCP-Gateway/3.0",
+      // User-Agent is a hosting-edge compatibility signal only. Simpli machine
+      // identity and request integrity are established by the signed transport.
+      "User-Agent": this.config.wordpressUserAgent,
+      "X-Simpli-Client": `${release.name}/${release.version}`,
+      "X-Simpli-Release-Id": release.releaseId,
     };
 
     if (this.config.wordpressAuthMode === "basic" || this.config.wordpressAuthMode === "dual") {
@@ -326,6 +346,9 @@ export class WordPressClient {
         headers,
         body,
         signal: controller.signal,
+        // Redirects are rejected because the signed audience/path and the exact
+        // WordPress origin are security-sensitive, and POST redirects can change
+        // method/body semantics at hosting edges.
         redirect: "error",
       });
       const raw = await response.text();
