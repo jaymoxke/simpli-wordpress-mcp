@@ -49,14 +49,13 @@ async function listen(
   };
 }
 
-async function rpc(base: string, token: string, body: unknown, sessionId?: string): Promise<Response> {
+async function rpc(base: string, token: string, body: unknown): Promise<Response> {
   return fetch(`${base}/mcp`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/json, text/event-stream",
       "Content-Type": "application/json",
-      ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}),
     },
     body: JSON.stringify(body),
   });
@@ -71,40 +70,23 @@ async function readRpcJson<T>(response: Response): Promise<T> {
   return JSON.parse(data) as T;
 }
 
-async function initializedSession(base: string, token: string): Promise<string> {
-  const initialized = await rpc(base, token, {
-    jsonrpc: "2.0",
-    id: 1,
-    method: "initialize",
-    params: {
-      protocolVersion: "2025-06-18",
-      capabilities: {},
-      clientInfo: { name: "vitest", version: "1.0.0" },
-    },
-  });
-  expect(initialized.status).toBe(200);
-  const sessionId = initialized.headers.get("mcp-session-id");
-  expect(sessionId).toBeTruthy();
-  await rpc(base, token, { jsonrpc: "2.0", method: "notifications/initialized" }, sessionId!);
-  return sessionId!;
-}
-
-describe("Simpli Railway MCP", () => {
+describe("Simpli MCP v3 protocol gateway", () => {
   it("requires bearer authentication", async () => {
     const { base } = await listen();
     const response = await fetch(`${base}/mcp`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
     });
     expect(response.status).toBe(401);
     expect(response.headers.get("www-authenticate")).toContain("oauth-protected-resource");
   });
 
-  it("exposes exactly the Simpli backend tools and no Novamira tools", async () => {
+  it("serves stateless legacy tools/list without an MCP session id", async () => {
     const { base, token } = await listen();
-    const sessionId = await initializedSession(base, token);
-    const listed = await rpc(base, token, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, sessionId);
+    const listed = await rpc(base, token, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+    expect(listed.status).toBe(200);
+    expect(listed.headers.get("mcp-session-id")).toBeNull();
     const payload = await readRpcJson<{ result: { tools: Array<{ name: string }> } }>(listed);
     const names = payload.result.tools.map((tool) => tool.name);
     expect(names).toEqual(fakeTools.map((tool) => tool.name));
@@ -113,13 +95,11 @@ describe("Simpli Railway MCP", () => {
 
   it("restricts the dedicated WhatsApp credential to simpli_whatsapp_read", async () => {
     const { base, whatsappToken, fake } = await listen();
-    const sessionId = await initializedSession(base, whatsappToken);
 
     const listed = await rpc(
       base,
       whatsappToken,
       { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
-      sessionId,
     );
     const listPayload = await readRpcJson<{ result: { tools: Array<{ name: string }> } }>(listed);
     expect(listPayload.result.tools.map((tool) => tool.name)).toEqual(["simpli_whatsapp_read"]);
@@ -132,7 +112,7 @@ describe("Simpli Railway MCP", () => {
         name: "simpli_whatsapp_read",
         arguments: { operation: "PRODUCT_SEARCH", query: "sunscreen", limit: 3 },
       },
-    }, sessionId);
+    });
     const allowedPayload = await readRpcJson<{ result: { isError?: boolean } }>(allowed);
     expect(allowedPayload.result.isError).not.toBe(true);
 
@@ -141,7 +121,7 @@ describe("Simpli Railway MCP", () => {
       id: 4,
       method: "tools/call",
       params: { name: "simpli_self_status", arguments: {} },
-    }, sessionId);
+    });
     const blockedPayload = await readRpcJson<{
       result: { isError?: boolean; structuredContent?: { status?: number; error?: string } };
     }>(blocked);
@@ -156,15 +136,14 @@ describe("Simpli Railway MCP", () => {
     expect(forbiddenForward).toBeUndefined();
   });
 
-  it("runs a read-only Simpli tool end to end", async () => {
+  it("runs a read-only Simpli tool end to end without server-side MCP session state", async () => {
     const { base, token } = await listen();
-    const sessionId = await initializedSession(base, token);
     const called = await rpc(base, token, {
       jsonrpc: "2.0",
       id: 3,
       method: "tools/call",
       params: { name: "simpli_self_status", arguments: {} },
-    }, sessionId);
+    });
     const payload = await readRpcJson<{ result: { isError?: boolean; structuredContent?: { version?: string } } }>(called);
     expect(payload.result.isError).not.toBe(true);
     expect(payload.result.structuredContent?.version).toBe("0.2.0");
@@ -172,7 +151,6 @@ describe("Simpli Railway MCP", () => {
 
   it("passes plugin-owned write guards through unchanged", async () => {
     const { base, token, fake } = await listen();
-    const sessionId = await initializedSession(base, token);
     const argumentsPayload = {
       file_key: "server",
       expected_sha256: "a".repeat(64),
@@ -186,7 +164,7 @@ describe("Simpli Railway MCP", () => {
       id: 4,
       method: "tools/call",
       params: { name: "simpli_patch_code_file", arguments: argumentsPayload },
-    }, sessionId);
+    });
     const payload = await readRpcJson<{ result: { isError?: boolean } }>(called);
     expect(payload.result.isError).not.toBe(true);
 
@@ -199,14 +177,13 @@ describe("Simpli Railway MCP", () => {
 
   it("routes the verified stale site-info tool through the governed Simpli dispatcher", async () => {
     const { base, token, fake } = await listen([...fakeTools, dispatcherTool]);
-    const sessionId = await initializedSession(base, token);
     const legacyArguments = { fields: ["name", "url", "version"] };
     const called = await rpc(base, token, {
       jsonrpc: "2.0",
       id: 5,
       method: "tools/call",
       params: { name: "wp__core_get-site-info", arguments: legacyArguments },
-    }, sessionId);
+    });
     const payload = await readRpcJson<{ result: { isError?: boolean } }>(called);
     expect(payload.result.isError).not.toBe(true);
 
@@ -223,15 +200,14 @@ describe("Simpli Railway MCP", () => {
     });
   });
 
-  it("fails closed for stale tools without a verified Simpli v2 equivalent", async () => {
+  it("fails closed for stale tools without a verified Simpli equivalent", async () => {
     const { base, token } = await listen([...fakeTools, dispatcherTool]);
-    const sessionId = await initializedSession(base, token);
     const called = await rpc(base, token, {
       jsonrpc: "2.0",
       id: 6,
       method: "tools/call",
       params: { name: "wp__novamira_execute-php", arguments: { code: "echo 'x';" } },
-    }, sessionId);
+    });
     const payload = await readRpcJson<{ result: { isError?: boolean; structuredContent?: { status?: number } } }>(called);
     expect(payload.result.isError).toBe(true);
     expect(payload.result.structuredContent?.status).toBe(410);
