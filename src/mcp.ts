@@ -6,6 +6,7 @@ import type { Logger } from "./logger.js";
 import { BrowserQaClient } from "./browser-qa.js";
 import {
   AuthorityBrokerRequiredError,
+  SensitiveReadScopeRequiredError,
   assertGatewayExecutionAllowed,
   isReadScope,
   MUTATION_EXECUTION_STATE,
@@ -23,6 +24,8 @@ type BackendOutput = Awaited<ReturnType<WordPressClient["callTool"]>>;
 
 const WHATSAPP_CLIENT_ID = "simpli-whatsapp-intelligence";
 const WHATSAPP_ALLOWED_TOOLS = new Set(["simpli_whatsapp_read"]);
+const A1_READ = "A1_READ_AND_ANALYZE";
+const A2_SENSITIVE_READ = "A2_SENSITIVE_READ";
 
 const LEGACY_ABILITY_ALIASES: Record<string, { abilityName: string; scope: GatewayScope }> = {
   "core/get-site-info": { abilityName: "wordpress/site-info.get", scope: "wordpress:read" },
@@ -73,7 +76,15 @@ function errorResult(error: unknown, maxBytes: number): CallToolResult {
             scope: error.scope,
             mutationExecutionState: MUTATION_EXECUTION_STATE,
           }
-        : { error: error instanceof Error ? error.message : String(error) };
+        : error instanceof SensitiveReadScopeRequiredError
+          ? {
+              error: error.message,
+              code: error.code,
+              status: error.status,
+              operation: error.operation,
+              scope: error.scope,
+            }
+          : { error: error instanceof Error ? error.message : String(error) };
   const result = textResult(payload, maxBytes);
   return { ...result, isError: true };
 }
@@ -116,6 +127,9 @@ function toMcpTool(tool: SimpliBackendTool): Tool {
       "simpli/backend": "wordpress-plugin",
       "simpli/sourceTool": tool.name,
       "simpli/executionState": "READ_ONLY_DIRECT_PATH",
+      ...(tool.name === "simpli_execute"
+        ? { "simpli/nestedAuthorityGate": "A1=wordpress:read;A2=wordpress:sensitive;writes=sealed-authority" }
+        : {}),
     },
   };
 }
@@ -158,6 +172,73 @@ function mergeBrowserCatalog(output: BackendOutput, browserQa: BrowserQaClient):
       abilities: [...existing, ...browserAbilities],
     },
   };
+}
+
+function readAuthorityClass(output: BackendOutput, abilityName: string): string {
+  const structured = output.structuredContent;
+  if (typeof structured !== "object" || structured === null || Array.isArray(structured)) {
+    throw new WordPressRequestError(
+      `Simpli ability contract is unavailable for ${abilityName}`,
+      502,
+      { code: "SIMPLI_ABILITY_CONTRACT_UNAVAILABLE" },
+    );
+  }
+  const authorityClass = (structured as Record<string, unknown>).authority_class;
+  if (typeof authorityClass !== "string" || !authorityClass.trim()) {
+    throw new WordPressRequestError(
+      `Simpli ability authority class is unavailable for ${abilityName}`,
+      502,
+      { code: "SIMPLI_ABILITY_AUTHORITY_CLASS_UNAVAILABLE" },
+    );
+  }
+  return authorityClass.trim();
+}
+
+function mutationScopeForAuthorityClass(authorityClass: string): GatewayScope {
+  return authorityClass.startsWith("A5_") || authorityClass.startsWith("A6_")
+    ? "wordpress:dangerous"
+    : "wordpress:write";
+}
+
+async function authorizeReadDispatcherAbility(
+  wordpress: WordPressClient,
+  auth: AuthContext,
+  args: Record<string, unknown>,
+): Promise<{ scope: GatewayScope; abilityName: string; authorityClass: string }> {
+  const abilityName = typeof args.ability_name === "string" ? args.ability_name.trim() : "";
+  const input = args.input;
+  if (!abilityName || typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new WordPressRequestError(
+      "Read-only simpli_execute requires ability_name and an input object.",
+      400,
+      { code: "SIMPLI_READ_DISPATCH_INVALID" },
+    );
+  }
+  const unexpected = Object.keys(args).filter((key) => key !== "ability_name" && key !== "input");
+  if (unexpected.length > 0) {
+    throw new WordPressRequestError(
+      "Caller authority or confirmation metadata is not accepted on the direct read dispatcher.",
+      400,
+      { code: "SIMPLI_READ_DISPATCH_METADATA_REJECTED", fields: unexpected.sort() },
+    );
+  }
+
+  const contract = await wordpress.callTool("simpli_describe", { ability_name: abilityName });
+  const authorityClass = readAuthorityClass(contract, abilityName);
+  if (authorityClass === A1_READ) {
+    authorizeOperation(auth, "wordpress:read", abilityName);
+    return { scope: "wordpress:read", abilityName, authorityClass };
+  }
+  if (authorityClass === A2_SENSITIVE_READ) {
+    if (!auth.scopes.has("wordpress:sensitive")) {
+      throw new SensitiveReadScopeRequiredError(abilityName);
+    }
+    authorizeOperation(auth, "wordpress:sensitive", abilityName);
+    return { scope: "wordpress:sensitive", abilityName, authorityClass };
+  }
+
+  const blockedScope = mutationScopeForAuthorityClass(authorityClass);
+  throw new AuthorityBrokerRequiredError(abilityName, blockedScope);
 }
 
 async function callCompatibilityTool(
@@ -236,7 +317,7 @@ export function createMcpServer(
     {
       capabilities: { tools: { listChanged: true } },
       instructions:
-        "Simpli Cosmetics Kenya first-party MCP. Direct public-gateway execution is currently read-only. Mutations fail closed until the existing SuperComputer sealed-permit authority lane is integrated. Tool access, OAuth scope, caller-supplied authority references and valid machine transport signatures do not grant business authority. Read current state before any future write; material mutations require exact authority, idempotency/before-state controls and read-back verification. Never infer production acceptance from transport-level success.",
+        "Simpli Cosmetics Kenya first-party MCP. Direct public-gateway execution is read-only. A1 reads require wordpress:read; A2 sensitive reads additionally require wordpress:sensitive. Mutations fail closed until the existing SuperComputer sealed-permit authority lane is integrated. Tool access, OAuth scope, caller-supplied authority references and valid machine transport signatures do not grant business authority. Read current state before any future write; material mutations require exact authority, idempotency/before-state controls and read-back verification. Never infer production acceptance from transport-level success.",
     },
   );
 
@@ -328,9 +409,24 @@ export function createMcpServer(
       } else {
         try {
           const tool = await wordpress.getTool(toolName);
-          scope = requiredScope(tool);
-          authorizeOperation(auth, scope, toolName);
-          output = await wordpress.callTool(toolName, args);
+          const topLevelScope = requiredScope(tool);
+          if (toolName === "simpli_execute" && isReadScope(topLevelScope)) {
+            const nested = await authorizeReadDispatcherAbility(wordpress, auth, args);
+            scope = nested.scope;
+            output = await wordpress.callTool(toolName, args);
+            logger.info("Governed Simpli read dispatcher ability invoked", {
+              toolName,
+              abilityName: nested.abilityName,
+              authorityClass: nested.authorityClass,
+              scope,
+              authMode: auth.mode,
+              clientId: auth.clientId.slice(0, 24),
+            });
+          } else {
+            scope = topLevelScope;
+            authorizeOperation(auth, scope, toolName);
+            output = await wordpress.callTool(toolName, args);
+          }
         } catch (error) {
           if (!(error instanceof WordPressRequestError) || error.status !== 404) throw error;
           const compatibility = await callCompatibilityTool(wordpress, auth, toolName, args);

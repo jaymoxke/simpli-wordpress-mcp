@@ -1,4 +1,8 @@
-export type GatewayExecutionScope = "wordpress:read" | "wordpress:write" | "wordpress:dangerous";
+export type GatewayExecutionScope =
+  | "wordpress:read"
+  | "wordpress:sensitive"
+  | "wordpress:write"
+  | "wordpress:dangerous";
 
 export const PUBLIC_GATEWAY_EXECUTION_CEILING = "A2_PROPOSE" as const;
 export const MUTATION_AUTHORITY_SOURCE = "supercomputer-sealed-permit" as const;
@@ -10,6 +14,7 @@ export interface AuthorityGateStatus {
   mutationExecutionState: typeof MUTATION_EXECUTION_STATE;
   directBackendWrites: false;
   callerSuppliedAuthorityAccepted: false;
+  sensitiveReadsRequireDedicatedScope: true;
 }
 
 export class AuthorityBrokerRequiredError extends Error {
@@ -24,6 +29,17 @@ export class AuthorityBrokerRequiredError extends Error {
   }
 }
 
+export class SensitiveReadScopeRequiredError extends Error {
+  readonly code = "SIMPLI_SENSITIVE_READ_SCOPE_REQUIRED";
+  readonly status = 403;
+  readonly scope = "wordpress:sensitive" as const;
+
+  constructor(readonly operation: string) {
+    super(`Sensitive Simpli read requires the dedicated wordpress:sensitive OAuth scope for ${operation}.`);
+    this.name = "SensitiveReadScopeRequiredError";
+  }
+}
+
 export function authorityGateStatus(): AuthorityGateStatus {
   return {
     executionCeiling: PUBLIC_GATEWAY_EXECUTION_CEILING,
@@ -31,11 +47,12 @@ export function authorityGateStatus(): AuthorityGateStatus {
     mutationExecutionState: MUTATION_EXECUTION_STATE,
     directBackendWrites: false,
     callerSuppliedAuthorityAccepted: false,
+    sensitiveReadsRequireDedicatedScope: true,
   };
 }
 
 export function isReadScope(scope: GatewayExecutionScope): boolean {
-  return scope === "wordpress:read";
+  return scope === "wordpress:read" || scope === "wordpress:sensitive";
 }
 
 export function assertGatewayExecutionAllowed(scope: GatewayExecutionScope, operation: string): void {

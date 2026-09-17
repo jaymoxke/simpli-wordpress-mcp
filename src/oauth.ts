@@ -15,6 +15,7 @@ import { OAuthStateStore, OAuthStoreError } from "./oauth-store.js";
 
 export const SUPPORTED_SCOPES = [
   "wordpress:read",
+  "wordpress:sensitive",
   "wordpress:write",
   "wordpress:dangerous",
 ] as const;
@@ -208,7 +209,7 @@ export class OAuthService {
 body{font-family:system-ui,sans-serif;background:#f6f7f9;color:#17202a;margin:0;padding:2rem}.card{max-width:34rem;margin:5vh auto;background:white;padding:2rem;border-radius:1rem;box-shadow:0 12px 40px #0001}h1{font-size:1.5rem}code{background:#f1f3f5;padding:.15rem .35rem;border-radius:.3rem}label{display:block;font-weight:600;margin:1.25rem 0 .4rem}input[type=password]{box-sizing:border-box;width:100%;padding:.8rem;border:1px solid #aeb6bf;border-radius:.5rem}button{margin-top:1rem;padding:.8rem 1rem;border:0;border-radius:.5rem;background:#111827;color:white;font-weight:700;cursor:pointer}.warning{padding:.8rem;background:#fff7ed;border-left:4px solid #f97316}.scopes{line-height:1.7}
 </style></head><body><main class="card"><h1>Authorize WordPress control</h1>
 <p><strong>${escapeHtml(client.clientName)}</strong> is requesting access to the Simpli WordPress MCP gateway.</p>
-<div class="warning">This connection can modify a live WordPress site if write scopes and separate execution authority are later granted. Approve only a client you initiated.</div>
+<div class="warning">Read access may include sensitive operational data only when the dedicated <code>wordpress:sensitive</code> scope is granted. Live mutations remain separately gated by Simpli execution authority.</div>
 <p class="scopes"><strong>Requested OAuth scopes:</strong><br>${scopes.map(escapeHtml).join("<br>")}</p>
 <p><strong>Return address:</strong> <code>${escapeHtml(parsed.data.redirect_uri)}</code></p>
 <form method="post" action="/oauth/authorize">${fields}<label for="admin_password">Owner authorization password</label><input id="admin_password" name="admin_password" type="password" autocomplete="current-password" required><button type="submit">Authorize connection</button></form>

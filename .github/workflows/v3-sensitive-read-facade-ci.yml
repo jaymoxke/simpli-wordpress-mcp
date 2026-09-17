@@ -1,0 +1,75 @@
+name: V3 Sensitive Read Facade CI
+
+on:
+  push:
+    branches: [v3-sensitive-read-facade]
+  pull_request:
+    branches: [v3-wordpress-read-runtime]
+
+permissions:
+  contents: write
+
+jobs:
+  verify-sensitive-read-facade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: sodium
+      - name: Use pinned npm for deterministic lock generation
+        run: npm install --global npm@11.6.0
+      - name: Generate exact rc.8 dependency lock
+        run: npm install --package-lock-only --no-audit --no-fund
+      - name: Install from generated lock
+        run: npm ci --no-audit --no-fund
+      - name: Type and static checks
+        run: npm run check
+      - name: Gateway tests
+        run: npm test
+      - name: WhatsApp gateway static checks
+        working-directory: whatsapp-gateway
+        run: npm run check
+      - name: WhatsApp gateway tests
+        working-directory: whatsapp-gateway
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Runtime syntax check
+        run: node --check dist/server.js
+      - name: PHP runtime syntax
+        run: |
+          php -l wordpress-runtime/lib/signed-transport-core.php
+          php -l wordpress-runtime/simpli-mcp-signed-transport.php
+          php -l wordpress-runtime/lib/first-party-read-core.php
+          php -l wordpress-runtime/simpli-mcp-runtime.php
+          php -l tests/php/verify-transport-vector.php
+          php -l tests/php/verify-first-party-read-core.php
+      - name: First-party read contract regression
+        run: php tests/php/verify-first-party-read-core.php
+      - name: Cross-language Ed25519 contract regression
+        run: |
+          node scripts/write-transport-test-vector.mjs /tmp/simpli-transport-vector.json
+          php tests/php/verify-transport-vector.php /tmp/simpli-transport-vector.json
+      - name: Container build
+        run: docker build -t simpli-mcp-v3-sensitive-read:test .
+      - name: Commit verified dependency lock to sensitive-read branch
+        if: github.event_name == 'push'
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo "package-lock.json already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "v3 privacy: lock verified rc.8 dependencies [skip ci]"
+          git push origin HEAD:v3-sensitive-read-facade

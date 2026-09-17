@@ -47,7 +47,7 @@ export const fakeTools: SimpliBackendTool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        operation: { type: "string", enum: ["PRODUCT_SEARCH", "PRODUCT_GET"] },
+        operation: { type: "string", enum: ["PRODUCT_SEARCH", "PRODUCT_GET", "GOLDEN_LIST", "SOURCING_SEARCH"] },
         query: { type: "string" },
         sku: { type: "string" },
         product_id: { type: "integer" },
@@ -97,6 +97,15 @@ export interface FetchCall {
   body?: Record<string, unknown>;
 }
 
+function authorityClassForAbility(abilityName: string): string {
+  if (abilityName === "woocommerce/order.get" || abilityName === "woocommerce/orders.query") {
+    return "A2_SENSITIVE_READ";
+  }
+  if (abilityName.startsWith("dangerous/")) return "A6_RESERVED_HIGH_RISK";
+  if (abilityName.startsWith("write/")) return "A4_BOUNDED_WRITE";
+  return "A1_READ_AND_ANALYZE";
+}
+
 export function makeWordPressFetch(tools: SimpliBackendTool[] = fakeTools): {
   fetch: typeof fetch;
   calls: FetchCall[];
@@ -131,6 +140,30 @@ export function makeWordPressFetch(tools: SimpliBackendTool[] = fakeTools): {
           result: {
             structuredContent: { state: "STATE_VERIFIED", version: "0.2.0" },
             content: [{ type: "text", text: "status" }],
+            isError: false,
+          },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (params?.name === "simpli_describe") {
+        const abilityName = typeof params.arguments?.ability_name === "string"
+          ? params.arguments.ability_name
+          : "";
+        const authorityClass = authorityClassForAbility(abilityName);
+        const structuredContent = {
+          name: abilityName,
+          authority_class: authorityClass,
+          readonly: authorityClass === "A1_READ_AND_ANALYZE" || authorityClass === "A2_SENSITIVE_READ",
+          requires_confirmation: !(
+            authorityClass === "A1_READ_AND_ANALYZE" || authorityClass === "A2_SENSITIVE_READ"
+          ),
+          input_schema: { type: "object" },
+        };
+        return new Response(JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            structuredContent,
+            content: [{ type: "text", text: JSON.stringify(structuredContent) }],
             isError: false,
           },
         }), { status: 200, headers: { "Content-Type": "application/json" } });
