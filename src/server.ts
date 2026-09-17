@@ -1,12 +1,8 @@
-import { randomUUID } from "node:crypto";
 import { createServer, type Server as HttpServer } from "node:http";
-import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { createMcpExpressApp } from "@modelcontextprotocol/express";
+import { toNodeHandler } from "@modelcontextprotocol/node";
+import { createMcpHandler, type AuthInfo as SdkAuthInfo } from "@modelcontextprotocol/server";
 import type { Request, Response, NextFunction } from "express";
-import express from "express";
 import helmet from "helmet";
 import { loadConfig, redactConfig, type AppConfig } from "./config.js";
 import { constantTimeEqual } from "./crypto.js";
@@ -16,17 +12,13 @@ import { createOAuthRouter, OAuthService, type AuthContext } from "./oauth.js";
 import { releaseMetadata, SIMPLI_MCP_VERSION } from "./version.js";
 import { WordPressClient } from "./wordpress.js";
 
-interface SessionEntry {
-  transport: StreamableHTTPServerTransport;
-  server: ReturnType<typeof createMcpServer>;
-  auth: AuthContext;
-  createdAt: number;
-}
-
 interface RateRecord {
   count: number;
   resetAt: number;
 }
+
+const MCP_MAX_BODY_BYTES = 2 * 1024 * 1024;
+const WHATSAPP_CLIENT_ID = "simpli-whatsapp-intelligence";
 
 function createRateLimit(options: { windowMs: number; max: number; keyPrefix: string }) {
   const records = new Map<string, RateRecord>();
@@ -43,7 +35,10 @@ function createRateLimit(options: { windowMs: number; max: number; keyPrefix: st
     res.set("RateLimit-Remaining", String(Math.max(0, options.max - record.count)));
     res.set("RateLimit-Reset", String(Math.ceil(record.resetAt / 1000)));
     if (record.count > options.max) {
-      res.status(429).json({ error: "rate_limit_exceeded", retry_after_seconds: Math.ceil((record.resetAt - now) / 1000) });
+      res.status(429).json({
+        error: "rate_limit_exceeded",
+        retry_after_seconds: Math.ceil((record.resetAt - now) / 1000),
+      });
       return;
     }
     if (records.size > 5000) {
@@ -54,18 +49,42 @@ function createRateLimit(options: { windowMs: number; max: number; keyPrefix: st
 }
 
 function attachSdkAuth(req: Request, auth: AuthContext): void {
-  (req as Request & { auth?: AuthInfo }).auth = {
+  const sdkAuth: SdkAuthInfo = {
     token: "verified",
     clientId: auth.clientId,
     scopes: [...auth.scopes],
     ...(auth.expiresAt ? { expiresAt: auth.expiresAt } : {}),
   };
+  (req as Request & { auth?: SdkAuthInfo }).auth = sdkAuth;
+}
+
+function authContextFromSdk(auth: SdkAuthInfo): AuthContext {
+  const staticClient = auth.clientId === WHATSAPP_CLIENT_ID || auth.clientId === "static-token";
+  return {
+    subject: staticClient ? auth.clientId : "wordpress-owner",
+    clientId: auth.clientId,
+    scopes: new Set(auth.scopes),
+    ...(auth.expiresAt ? { expiresAt: auth.expiresAt } : {}),
+    mode: staticClient ? "static" : "oauth",
+  };
+}
+
+function allowedMcpHosts(config: AppConfig): string[] {
+  return [...new Set([
+    new URL(config.publicBaseUrl).hostname,
+    "localhost",
+    "127.0.0.1",
+    "[::1]",
+  ])];
 }
 
 export function createApp(config: AppConfig, logger: Logger, wordpress: WordPressClient) {
-  const app = createMcpExpressApp({ host: "0.0.0.0" });
+  const app = createMcpExpressApp({
+    host: "0.0.0.0",
+    allowedHosts: allowedMcpHosts(config),
+    jsonLimit: "2mb",
+  });
   const oauth = new OAuthService(config, logger);
-  const sessions = new Map<string, SessionEntry>();
 
   const authenticateMcp = (req: Request, res: Response, next: NextFunction): void => {
     const authorization = req.header("authorization") ?? "";
@@ -76,16 +95,27 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
       constantTimeEqual(match[1], config.whatsappMcpToken)
     ) {
       const auth: AuthContext = {
-        subject: "simpli-whatsapp-intelligence",
-        clientId: "simpli-whatsapp-intelligence",
+        subject: WHATSAPP_CLIENT_ID,
+        clientId: WHATSAPP_CLIENT_ID,
         scopes: new Set(["wordpress:read"]),
         mode: "static",
       };
       res.locals.auth = auth;
+      attachSdkAuth(req, auth);
       next();
       return;
     }
-    oauth.authenticate(req, res, next);
+
+    oauth.authenticate(req, res, () => {
+      const auth = res.locals.auth as AuthContext | undefined;
+      if (!auth) {
+        logger.error("OAuth middleware completed without validated auth context");
+        if (!res.headersSent) res.status(500).json({ error: "auth_context_missing" });
+        return;
+      }
+      attachSdkAuth(req, auth);
+      next();
+    });
   };
 
   app.disable("x-powered-by");
@@ -111,13 +141,12 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
     createRateLimit({ windowMs: 15 * 60_000, max: 10, keyPrefix: "oauth-authorize" }),
   );
   app.use(createOAuthRouter(config, oauth));
-  app.use(express.json({ limit: "2mb", type: ["application/json", "application/*+json"] }));
 
   app.get("/", (_req, res) => {
     res.json({
       ...releaseMetadata(),
       displayName: "Simpli WordPress MCP",
-      transport: "MCP Streamable HTTP",
+      transport: "MCP HTTP per-request",
       mcp: `${config.publicBaseUrl}/mcp`,
       health: `${config.publicBaseUrl}/health`,
       readiness: `${config.publicBaseUrl}/ready`,
@@ -131,13 +160,13 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
       "Simpli WordPress MCP gateway",
       "",
       `Release: ${SIMPLI_MCP_VERSION}`,
-      "MCP endpoint: /mcp (Streamable HTTP)",
+      "MCP endpoint: /mcp (per-request HTTP; modern 2026-07-28 with stateless legacy fallback)",
       "OAuth metadata: /.well-known/oauth-protected-resource",
       "Liveness: /health",
       "WordPress readiness: /ready",
-      "Immutable release metadata: /version",
+      "Release metadata: /version",
       "",
-      "The gateway exposes only Simpli-owned, explicitly admitted backend capabilities and preserves each capability's input schema and safety annotations.",
+      "The gateway exposes Simpli-owned governed backend capabilities and preserves each capability's schema and safety annotations.",
     ].join("\n"));
   });
 
@@ -155,91 +184,31 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
   });
 
   const mcpRateLimit = createRateLimit({ windowMs: 60_000, max: 300, keyPrefix: "mcp" });
-
-  app.post("/mcp", mcpRateLimit, authenticateMcp, async (req, res) => {
-    const auth = res.locals.auth as AuthContext;
-    attachSdkAuth(req, auth);
-    const sessionIdHeader = req.header("mcp-session-id");
-    try {
-      if (sessionIdHeader) {
-        const entry = sessions.get(sessionIdHeader);
-        if (!entry) {
-          res.status(404).json({ jsonrpc: "2.0", error: { code: -32001, message: "Unknown MCP session" }, id: null });
-          return;
-        }
-        if (entry.auth.clientId !== auth.clientId || entry.auth.subject !== auth.subject) {
-          res.status(403).json({ jsonrpc: "2.0", error: { code: -32002, message: "MCP session identity mismatch" }, id: null });
-          return;
-        }
-        await entry.transport.handleRequest(req, res, req.body);
-        return;
-      }
-
-      if (!isInitializeRequest(req.body)) {
-        res.status(400).json({
-          jsonrpc: "2.0",
-          error: { code: -32000, message: "Initialize the MCP session before calling tools" },
-          id: null,
-        });
-        return;
-      }
-
-      let entry: SessionEntry;
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (sessionId) => {
-          sessions.set(sessionId, entry);
-          logger.info("MCP session initialized", { sessionId, authMode: auth.mode });
-        },
+  const mcpHandler = createMcpHandler(
+    ({ authInfo, era }) => {
+      if (!authInfo) throw new Error("MCP request reached the handler without validated authentication");
+      const auth = authContextFromSdk(authInfo);
+      logger.debug("Creating per-request MCP server", {
+        era,
+        authMode: auth.mode,
+        clientId: auth.clientId.slice(0, 24),
       });
-      const mcpServer = createMcpServer(config, wordpress, auth, logger);
-      entry = { transport, server: mcpServer, auth, createdAt: Date.now() };
-      transport.onclose = () => {
-        const sessionId = transport.sessionId;
-        if (sessionId) sessions.delete(sessionId);
-        logger.info("MCP session closed", { sessionId: sessionId ?? "uninitialized" });
-      };
-      transport.onerror = (error) => logger.warn("MCP transport error", { error: error.message });
-      await mcpServer.connect(transport as unknown as Transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (error) {
-      logger.error("MCP POST request failed", { error: error instanceof Error ? error.message : String(error) });
-      if (!res.headersSent) {
-        res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null });
-      }
-    }
+      return createMcpServer(config, wordpress, auth, logger);
+    },
+    {
+      legacy: "stateless",
+      responseMode: "auto",
+      maxRequestBodySize: MCP_MAX_BODY_BYTES,
+      onerror: (error) => logger.warn("MCP handler error", { error: error.message }),
+    },
+  );
+  const nodeMcpHandler = toNodeHandler(mcpHandler, {
+    maxRequestBodySize: MCP_MAX_BODY_BYTES,
+    onerror: (error) => logger.warn("MCP Node adapter error", { error: error.message }),
   });
 
-  app.get("/mcp", mcpRateLimit, authenticateMcp, async (req, res) => {
-    const auth = res.locals.auth as AuthContext;
-    attachSdkAuth(req, auth);
-    const sessionId = req.header("mcp-session-id");
-    const entry = sessionId ? sessions.get(sessionId) : undefined;
-    if (!entry) {
-      res.status(400).json({ jsonrpc: "2.0", error: { code: -32000, message: "Invalid or missing MCP session" }, id: null });
-      return;
-    }
-    if (entry.auth.clientId !== auth.clientId || entry.auth.subject !== auth.subject) {
-      res.status(403).json({ jsonrpc: "2.0", error: { code: -32002, message: "MCP session identity mismatch" }, id: null });
-      return;
-    }
-    await entry.transport.handleRequest(req, res);
-  });
-
-  app.delete("/mcp", mcpRateLimit, authenticateMcp, async (req, res) => {
-    const auth = res.locals.auth as AuthContext;
-    attachSdkAuth(req, auth);
-    const sessionId = req.header("mcp-session-id");
-    const entry = sessionId ? sessions.get(sessionId) : undefined;
-    if (!entry) {
-      res.status(400).json({ jsonrpc: "2.0", error: { code: -32000, message: "Invalid or missing MCP session" }, id: null });
-      return;
-    }
-    if (entry.auth.clientId !== auth.clientId || entry.auth.subject !== auth.subject) {
-      res.status(403).json({ jsonrpc: "2.0", error: { code: -32002, message: "MCP session identity mismatch" }, id: null });
-      return;
-    }
-    await entry.transport.handleRequest(req, res);
+  app.all("/mcp", mcpRateLimit, authenticateMcp, async (req, res) => {
+    await nodeMcpHandler(req, res, req.body);
   });
 
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
@@ -248,13 +217,13 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
     if (!res.headersSent) res.status(500).json({ error: "internal_server_error" });
   });
 
-  return { app, sessions };
+  return { app, mcpHandler };
 }
 
 export async function startServer(config = loadConfig()): Promise<HttpServer> {
   const logger = createLogger(config);
   const wordpress = new WordPressClient(config, logger);
-  const { app, sessions } = createApp(config, logger, wordpress);
+  const { app, mcpHandler } = createApp(config, logger, wordpress);
   logger.info("Starting Simpli WordPress MCP", { ...redactConfig(config), release: releaseMetadata() });
 
   const httpServer = createServer(app);
@@ -277,18 +246,13 @@ export async function startServer(config = loadConfig()): Promise<HttpServer> {
   });
 
   const shutdown = async (signal: string) => {
-    logger.info("Shutdown requested", { signal, sessions: sessions.size });
-    for (const [sessionId, entry] of sessions) {
-      try {
-        await entry.server.close();
-      } catch (error) {
-        logger.warn("MCP server close failed", { sessionId, error: error instanceof Error ? error.message : String(error) });
-      }
-      try {
-        await entry.transport.close();
-      } catch (error) {
-        logger.warn("MCP transport close failed", { sessionId, error: error instanceof Error ? error.message : String(error) });
-      }
+    logger.info("Shutdown requested", { signal });
+    try {
+      await mcpHandler.close();
+    } catch (error) {
+      logger.warn("MCP handler close failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
     httpServer.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 10_000).unref();
