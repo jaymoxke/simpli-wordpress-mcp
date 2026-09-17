@@ -1,5 +1,5 @@
-export const SIMPLI_MCP_VERSION = "3.0.0-rc.1";
-export const SIMPLI_MCP_ARCHITECTURE = "v3-foundation";
+export const SIMPLI_MCP_VERSION = "3.0.0-rc.2";
+export const SIMPLI_MCP_ARCHITECTURE = "v3-protocol-modernization";
 
 function env(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -13,6 +13,9 @@ export interface ReleaseMetadata {
   releaseId: string;
   gitSha?: string;
   buildTimestamp?: string;
+  sdkLine: "mcp-typescript-v2";
+  modernProtocolTarget: "2026-07-28";
+  legacyProtocolPosture: "stateless-fallback";
   novamiraGatewayDependency: false;
   wordpressBackendIndependence: "unverified";
 }
@@ -28,6 +31,9 @@ export function releaseMetadata(): ReleaseMetadata {
     releaseId,
     ...(gitSha ? { gitSha } : {}),
     ...(buildTimestamp ? { buildTimestamp } : {}),
+    sdkLine: "mcp-typescript-v2",
+    modernProtocolTarget: "2026-07-28",
+    legacyProtocolPosture: "stateless-fallback",
     novamiraGatewayDependency: false,
     wordpressBackendIndependence: "unverified",
   };

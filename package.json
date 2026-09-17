@@ -1,8 +1,8 @@
 {
   "name": "simpli-wordpress-mcp",
-  "version": "2.0.0",
+  "version": "3.0.0-rc.2",
   "private": true,
-  "description": "Railway-hosted first-party Simpli MCP gateway for governed Simpli WordPress operations.",
+  "description": "First-party Simpli MCP control plane for governed Simpli WordPress operations.",
   "type": "module",
   "engines": {
     "node": ">=22 <25"
@@ -15,7 +15,9 @@
     "test": "vitest run --dir tests --coverage=false"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/express": "2.0.0",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
     "express": "5.2.1",
     "helmet": "8.3.0",
     "zod": "4.4.3"

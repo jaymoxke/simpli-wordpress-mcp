@@ -1,10 +1,4 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  type CallToolResult,
-  type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
+import { Server, type CallToolResult, type Tool } from "@modelcontextprotocol/server";
 import type { AppConfig } from "./config.js";
 import type { AuthContext } from "./oauth.js";
 import { requireScope } from "./oauth.js";
@@ -224,7 +218,7 @@ export function createMcpServer(
     },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
+  server.setRequestHandler("tools/list", async () => {
     requireScope(auth, "wordpress:read");
     const tools = await wordpress.listTools();
     const visibleTools = isWhatsappClient
@@ -233,7 +227,7 @@ export function createMcpServer(
     return { tools: visibleTools.map(toMcpTool) };
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler("tools/call", async (request) => {
     const toolName = request.params.name;
     try {
       if (isWhatsappClient && !WHATSAPP_ALLOWED_TOOLS.has(toolName)) {

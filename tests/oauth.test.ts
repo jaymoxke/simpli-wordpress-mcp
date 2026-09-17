@@ -26,7 +26,7 @@ async function listen(): Promise<string> {
 }
 
 describe("OAuth 2.1", () => {
-  it("supports DCR, authorization code + PKCE, refresh, and code replay prevention", async () => {
+  it("supports DCR, authorization code + PKCE, refresh, code replay prevention, and stateless MCP access", async () => {
     const base = await listen();
     const redirectUri = "https://chatgpt.com/connector/oauth/test-callback";
     const registration = await fetch(`${base}/oauth/register`, {
@@ -105,9 +105,14 @@ describe("OAuth 2.1", () => {
 
     const authenticated = await fetch(`${base}/mcp`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${tokens.access_token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "not-initialized" }),
+      headers: {
+        Authorization: `Bearer ${tokens.access_token}`,
+        Accept: "application/json, text/event-stream",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
     });
-    expect(authenticated.status).toBe(400);
+    expect(authenticated.status).toBe(200);
+    expect(authenticated.headers.get("mcp-session-id")).toBeNull();
   });
 });
