@@ -1,10 +1,14 @@
 import { isAbsolute } from "node:path";
 import { z } from "zod";
 
+export const DEFAULT_WORDPRESS_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36";
+
 const EnvSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   PUBLIC_BASE_URL: z.string().url(),
   WORDPRESS_URL: z.string().url(),
+  WORDPRESS_USER_AGENT: z.string().trim().min(16).max(512).default(DEFAULT_WORDPRESS_USER_AGENT),
   WORDPRESS_AUTH_MODE: z.enum(["basic", "dual", "signed"]).default("basic"),
   WORDPRESS_USERNAME: z.string().min(1).optional(),
   WORDPRESS_APP_PASSWORD: z.string().min(8).optional(),
@@ -42,6 +46,12 @@ function assertSecureUrl(value: string, name: string, originOnly: boolean): void
   }
 }
 
+function assertSafeHeaderValue(value: string, name: string): void {
+  if (value.includes("\r") || value.includes("\n")) {
+    throw new Error(`${name} must not contain CR/LF characters.`);
+  }
+}
+
 export type WordPressAuthMode = "basic" | "dual" | "signed";
 
 export interface AppConfig {
@@ -49,6 +59,7 @@ export interface AppConfig {
   publicBaseUrl: string;
   resourceUrl: string;
   wordpressUrl: string;
+  wordpressUserAgent: string;
   wordpressAuthMode: WordPressAuthMode;
   wordpressUsername?: string;
   wordpressAppPassword?: string;
@@ -128,7 +139,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   }
 
   assertSecureUrl(parsed.PUBLIC_BASE_URL, "PUBLIC_BASE_URL", true);
-  assertSecureUrl(parsed.WORDPRESS_URL, "WORDPRESS_URL", false);
+  // Exact WordPress origin is security-sensitive because signed requests bind the
+  // audience and redirects are rejected. A path here would create ambiguous route
+  // composition and a redirecting alias could break POST/signature semantics.
+  assertSecureUrl(parsed.WORDPRESS_URL, "WORDPRESS_URL", true);
+  assertSafeHeaderValue(parsed.WORDPRESS_USER_AGENT, "WORDPRESS_USER_AGENT");
   if (parsed.BROWSER_QA_BASE_URL) {
     assertSecureUrl(parsed.BROWSER_QA_BASE_URL, "BROWSER_QA_BASE_URL", true);
   }
@@ -139,6 +154,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     publicBaseUrl,
     resourceUrl: `${publicBaseUrl}/mcp`,
     wordpressUrl: withoutTrailingSlash(parsed.WORDPRESS_URL),
+    wordpressUserAgent: parsed.WORDPRESS_USER_AGENT,
     wordpressAuthMode: parsed.WORDPRESS_AUTH_MODE,
     ...(parsed.WORDPRESS_USERNAME ? { wordpressUsername: parsed.WORDPRESS_USERNAME } : {}),
     ...(parsed.WORDPRESS_APP_PASSWORD ? { wordpressAppPassword: parsed.WORDPRESS_APP_PASSWORD } : {}),
@@ -171,6 +187,7 @@ export function redactConfig(config: AppConfig): Record<string, unknown> {
     publicBaseUrl: config.publicBaseUrl,
     resourceUrl: config.resourceUrl,
     wordpressUrl: config.wordpressUrl,
+    wordpressUserAgentMode: config.wordpressUserAgent.startsWith("Mozilla/5.0") ? "browser-compatible" : "custom",
     wordpressAuthMode: config.wordpressAuthMode,
     wordpressSigningEnabled: config.wordpressAuthMode === "signed" || config.wordpressAuthMode === "dual",
     ...(config.wordpressSigningKeyId ? { wordpressSigningKeyId: config.wordpressSigningKeyId } : {}),
