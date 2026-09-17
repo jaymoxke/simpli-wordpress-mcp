@@ -1,11 +1,11 @@
 {
   "name": "simpli-wordpress-mcp",
-  "version": "3.0.0-rc.2",
+  "version": "3.0.0-rc.3",
   "private": true,
   "description": "First-party Simpli MCP control plane for governed Simpli WordPress operations.",
   "type": "module",
   "engines": {
-    "node": ">=22 <25"
+    "node": ">=24 <25"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node -e \"const fs=require('node:fs');fs.copyFileSync('dist/railway-entry.js','dist/server.js')\"",

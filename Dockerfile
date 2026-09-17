@@ -1,4 +1,4 @@
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -11,13 +11,15 @@ RUN npm test
 RUN npm run build
 RUN test -f dist/server.js && node --check dist/server.js
 
-FROM node:22-alpine AS runtime
+FROM node:24-alpine AS runtime
 ENV NODE_ENV=production
 ENV CHROMIUM_PATH=/usr/bin/chromium
 WORKDIR /app
 RUN apk add --no-cache chromium \
     && addgroup -S app \
-    && adduser -S app -G app
+    && adduser -S app -G app \
+    && mkdir -p /var/lib/simpli-mcp \
+    && chown -R app:app /var/lib/simpli-mcp
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist

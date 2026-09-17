@@ -1,5 +1,5 @@
-export const SIMPLI_MCP_VERSION = "3.0.0-rc.2";
-export const SIMPLI_MCP_ARCHITECTURE = "v3-protocol-modernization";
+export const SIMPLI_MCP_VERSION = "3.0.0-rc.3";
+export const SIMPLI_MCP_ARCHITECTURE = "v3-oauth-durable";
 
 function env(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -13,9 +13,13 @@ export interface ReleaseMetadata {
   releaseId: string;
   gitSha?: string;
   buildTimestamp?: string;
+  runtime: "node-24";
   sdkLine: "mcp-typescript-v2";
   modernProtocolTarget: "2026-07-28";
   legacyProtocolPosture: "stateless-fallback";
+  oauthTokenModel: "opaque-sha256-sqlite";
+  oauthRefreshRotation: true;
+  oauthDurableReplayProtection: true;
   novamiraGatewayDependency: false;
   wordpressBackendIndependence: "unverified";
 }
@@ -31,9 +35,13 @@ export function releaseMetadata(): ReleaseMetadata {
     releaseId,
     ...(gitSha ? { gitSha } : {}),
     ...(buildTimestamp ? { buildTimestamp } : {}),
+    runtime: "node-24",
     sdkLine: "mcp-typescript-v2",
     modernProtocolTarget: "2026-07-28",
     legacyProtocolPosture: "stateless-fallback",
+    oauthTokenModel: "opaque-sha256-sqlite",
+    oauthRefreshRotation: true,
+    oauthDurableReplayProtection: true,
     novamiraGatewayDependency: false,
     wordpressBackendIndependence: "unverified",
   };

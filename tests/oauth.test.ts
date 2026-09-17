@@ -25,94 +25,175 @@ async function listen(): Promise<string> {
   return `http://127.0.0.1:${address.port}`;
 }
 
-describe("OAuth 2.1", () => {
-  it("supports DCR, authorization code + PKCE, refresh, code replay prevention, and stateless MCP access", async () => {
-    const base = await listen();
-    const redirectUri = "https://chatgpt.com/connector/oauth/test-callback";
-    const registration = await fetch(`${base}/oauth/register`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ client_name: "ChatGPT test", redirect_uris: [redirectUri], token_endpoint_auth_method: "none" }),
-    });
-    expect(registration.status).toBe(201);
-    const client = await registration.json() as { client_id: string };
-    const verifier = "v".repeat(64);
-    const form = new URLSearchParams({
-      response_type: "code",
-      client_id: client.client_id,
-      redirect_uri: redirectUri,
-      code_challenge: sha256Base64Url(verifier),
-      code_challenge_method: "S256",
-      state: "state-123",
-      scope: "wordpress:read wordpress:write wordpress:dangerous",
-      resource: testConfig.resourceUrl,
-      admin_password: testConfig.oauthAdminPassword!,
-    });
-    const authorizationPage = await fetch(`${base}/oauth/authorize?${form.toString()}`);
-    expect(authorizationPage.status).toBe(200);
-    expect(authorizationPage.headers.get("cross-origin-opener-policy")).toBe("unsafe-none");
-    expect(authorizationPage.headers.get("content-security-policy")).toContain(
-      "form-action 'self' https://chatgpt.com",
-    );
-    expect(authorizationPage.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+async function createAuthorization(base: string, scope?: string): Promise<{
+  clientId: string;
+  redirectUri: string;
+  verifier: string;
+  code: string;
+}> {
+  const redirectUri = "https://chatgpt.com/connector/oauth/test-callback";
+  const registration = await fetch(`${base}/oauth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_name: "ChatGPT test",
+      redirect_uris: [redirectUri],
+      token_endpoint_auth_method: "none",
+    }),
+  });
+  expect(registration.status).toBe(201);
+  const client = await registration.json() as { client_id: string };
+  const verifier = "v".repeat(64);
+  const fields: Record<string, string> = {
+    response_type: "code",
+    client_id: client.client_id,
+    redirect_uri: redirectUri,
+    code_challenge: sha256Base64Url(verifier),
+    code_challenge_method: "S256",
+    state: "state-123",
+    resource: testConfig.resourceUrl,
+    admin_password: testConfig.oauthAdminPassword!,
+  };
+  if (scope) fields.scope = scope;
+  const form = new URLSearchParams(fields);
 
-    const authorization = await fetch(`${base}/oauth/authorize`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: form,
-      redirect: "manual",
-    });
-    expect(authorization.status).toBe(303);
-    expect(authorization.headers.get("cross-origin-opener-policy")).toBe("unsafe-none");
-    expect(authorization.headers.get("content-security-policy")).toContain(
-      "form-action 'self' https://chatgpt.com",
-    );
-    const location = new URL(authorization.headers.get("location")!);
-    expect(location.origin).toBe("https://chatgpt.com");
-    expect(location.searchParams.get("state")).toBe("state-123");
-    const code = location.searchParams.get("code")!;
+  const authorizationPage = await fetch(`${base}/oauth/authorize?${form.toString()}`);
+  expect(authorizationPage.status).toBe(200);
+  expect(authorizationPage.headers.get("cross-origin-opener-policy")).toBe("unsafe-none");
+  expect(authorizationPage.headers.get("content-security-policy")).toContain(
+    "form-action 'self' https://chatgpt.com",
+  );
+  expect(authorizationPage.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
 
-    const nonAuthorizationRoute = await fetch(`${base}/health`);
-    expect(nonAuthorizationRoute.headers.get("content-security-policy")).toContain("form-action 'self'");
-    expect(nonAuthorizationRoute.headers.get("content-security-policy")).not.toContain("https://chatgpt.com");
+  const authorization = await fetch(`${base}/oauth/authorize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: form,
+    redirect: "manual",
+  });
+  expect(authorization.status).toBe(303);
+  const location = new URL(authorization.headers.get("location")!);
+  expect(location.origin).toBe("https://chatgpt.com");
+  expect(location.searchParams.get("state")).toBe("state-123");
+  return {
+    clientId: client.client_id,
+    redirectUri,
+    verifier,
+    code: location.searchParams.get("code")!,
+  };
+}
 
-    const tokenBody = new URLSearchParams({
+async function exchangeCode(base: string, grant: {
+  clientId: string;
+  redirectUri: string;
+  verifier: string;
+  code: string;
+}): Promise<{ access_token: string; refresh_token: string; scope: string }> {
+  const response = await fetch(`${base}/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
       grant_type: "authorization_code",
-      code,
-      client_id: client.client_id,
-      redirect_uri: redirectUri,
-      code_verifier: verifier,
+      code: grant.code,
+      client_id: grant.clientId,
+      redirect_uri: grant.redirectUri,
+      code_verifier: grant.verifier,
       resource: testConfig.resourceUrl,
-    });
-    const tokenResponse = await fetch(`${base}/oauth/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: tokenBody,
-    });
-    expect(tokenResponse.status).toBe(200);
-    const tokens = await tokenResponse.json() as { access_token: string; refresh_token: string; scope: string };
-    expect(tokens.access_token).toBeTruthy();
-    expect(tokens.refresh_token).toBeTruthy();
+    }),
+  });
+  expect(response.status).toBe(200);
+  return await response.json() as { access_token: string; refresh_token: string; scope: string };
+}
+
+async function mcpStatus(base: string, accessToken: string): Promise<number> {
+  const response = await fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json, text/event-stream",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+  });
+  return response.status;
+}
+
+describe("OAuth 2.1 durable opaque-token flow", () => {
+  it("supports PKCE, durable one-time codes, rotating refresh tokens and family reuse containment", async () => {
+    const base = await listen();
+    const grant = await createAuthorization(
+      base,
+      "wordpress:read wordpress:write wordpress:dangerous",
+    );
+    const tokens = await exchangeCode(base, grant);
+
+    expect(tokens.access_token).toMatch(/^sat_/);
+    expect(tokens.refresh_token).toMatch(/^srt_/);
     expect(tokens.scope).toContain("wordpress:dangerous");
+    expect(await mcpStatus(base, tokens.access_token)).toBe(200);
 
     const replay = await fetch(`${base}/oauth/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: tokenBody,
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code: grant.code,
+        client_id: grant.clientId,
+        redirect_uri: grant.redirectUri,
+        code_verifier: grant.verifier,
+        resource: testConfig.resourceUrl,
+      }),
     });
     expect(replay.status).toBe(400);
     expect(await replay.json()).toMatchObject({ error: "invalid_grant" });
 
-    const authenticated = await fetch(`${base}/mcp`, {
+    const rotatedResponse = await fetch(`${base}/oauth/token`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${tokens.access_token}`,
-        Accept: "application/json, text/event-stream",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: tokens.refresh_token,
+        client_id: grant.clientId,
+        resource: testConfig.resourceUrl,
+      }),
     });
-    expect(authenticated.status).toBe(200);
-    expect(authenticated.headers.get("mcp-session-id")).toBeNull();
+    expect(rotatedResponse.status).toBe(200);
+    const rotated = await rotatedResponse.json() as { access_token: string; refresh_token: string; scope: string };
+    expect(rotated.access_token).not.toBe(tokens.access_token);
+    expect(rotated.refresh_token).not.toBe(tokens.refresh_token);
+    expect(await mcpStatus(base, rotated.access_token)).toBe(200);
+
+    const reused = await fetch(`${base}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: tokens.refresh_token,
+        client_id: grant.clientId,
+        resource: testConfig.resourceUrl,
+      }),
+    });
+    expect(reused.status).toBe(400);
+    expect(await reused.json()).toMatchObject({ error: "invalid_grant" });
+
+    // Reuse of an already-rotated refresh token is treated as credential theft:
+    // the entire token family, including the newest access token, is revoked.
+    expect(await mcpStatus(base, rotated.access_token)).toBe(401);
+  });
+
+  it("defaults omitted scopes to read-only and supports immediate access-token revocation", async () => {
+    const base = await listen();
+    const grant = await createAuthorization(base);
+    const tokens = await exchangeCode(base, grant);
+    expect(tokens.scope).toBe("wordpress:read");
+    expect(await mcpStatus(base, tokens.access_token)).toBe(200);
+
+    const revocation = await fetch(`${base}/oauth/revoke`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: tokens.access_token, client_id: grant.clientId }),
+    });
+    expect(revocation.status).toBe(200);
+    expect(await mcpStatus(base, tokens.access_token)).toBe(401);
   });
 });

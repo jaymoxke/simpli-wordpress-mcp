@@ -1,0 +1,41 @@
+name: V3 Durable OAuth CI
+
+on:
+  push:
+    branches: [v3-oauth-durable]
+  pull_request:
+    branches: [v3-protocol-mcp-v2]
+
+permissions:
+  contents: read
+
+jobs:
+  verify-durable-oauth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install from committed lock
+        run: npm ci --no-audit --no-fund
+      - name: Type and static checks
+        run: npm run check
+      - name: Tests
+        run: npm test
+      - name: WhatsApp gateway static checks
+        working-directory: whatsapp-gateway
+        run: npm run check
+      - name: WhatsApp gateway tests
+        working-directory: whatsapp-gateway
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Runtime syntax check
+        run: node --check dist/server.js
+      - name: Container build
+        run: docker build -t simpli-mcp-v3-oauth:test .

@@ -47,14 +47,30 @@ describe("canonical release identity", () => {
     const root = await rootResponse.json() as Record<string, unknown>;
     const health = await healthResponse.json() as Record<string, unknown>;
     const version = await versionResponse.json() as Record<string, unknown>;
-    const ready = await readyResponse.json() as { release?: Record<string, unknown> };
+    const ready = await readyResponse.json() as {
+      release?: Record<string, unknown>;
+      oauth?: Record<string, unknown>;
+    };
 
     for (const payload of [root, health, version, ready.release ?? {}]) {
       expect(payload.version).toBe(SIMPLI_MCP_VERSION);
+      expect(payload.runtime).toBe("node-24");
+      expect(payload.oauthTokenModel).toBe("opaque-sha256-sqlite");
+      expect(payload.oauthRefreshRotation).toBe(true);
+      expect(payload.oauthDurableReplayProtection).toBe(true);
       expect(payload.novamiraGatewayDependency).toBe(false);
       expect(payload.wordpressBackendIndependence).toBe("unverified");
     }
 
+    expect(ready.oauth).toMatchObject({
+      enabled: true,
+      storage: "sqlite",
+      durable: false,
+      healthy: true,
+      tokenModel: "opaque-sha256",
+      refreshRotation: true,
+      authorizationCodeReplayProtection: "durable",
+    });
     expect(versionResponse.headers.get("cache-control")).toContain("no-store");
   });
 });

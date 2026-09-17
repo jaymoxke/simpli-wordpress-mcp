@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import { z } from "zod";
 
 const EnvSchema = z.object({
@@ -6,8 +7,8 @@ const EnvSchema = z.object({
   WORDPRESS_URL: z.string().url(),
   WORDPRESS_USERNAME: z.string().min(1),
   WORDPRESS_APP_PASSWORD: z.string().min(8),
-  OAUTH_SIGNING_SECRET: z.string().min(32).optional(),
   OAUTH_ADMIN_PASSWORD: z.string().min(16).optional(),
+  OAUTH_STATE_DB_PATH: z.string().trim().min(1).optional(),
   MCP_STATIC_TOKEN: z.string().min(32).optional(),
   WHATSAPP_MCP_TOKEN: z.string().min(32).optional(),
   BROWSER_QA_BASE_URL: z.string().url().optional(),
@@ -44,8 +45,8 @@ export interface AppConfig {
   wordpressUrl: string;
   wordpressUsername: string;
   wordpressAppPassword: string;
-  oauthSigningSecret?: string;
   oauthAdminPassword?: string;
+  oauthStateDbPath?: string;
   staticToken?: string;
   whatsappMcpToken?: string;
   browserQaBaseUrl?: string;
@@ -62,18 +63,29 @@ export interface AppConfig {
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
   const parsed = EnvSchema.parse({
     ...environment,
-    OAUTH_SIGNING_SECRET: environment.OAUTH_SIGNING_SECRET || undefined,
     OAUTH_ADMIN_PASSWORD: environment.OAUTH_ADMIN_PASSWORD || undefined,
+    OAUTH_STATE_DB_PATH: environment.OAUTH_STATE_DB_PATH || undefined,
     MCP_STATIC_TOKEN: environment.MCP_STATIC_TOKEN || undefined,
     WHATSAPP_MCP_TOKEN: environment.WHATSAPP_MCP_TOKEN || undefined,
     BROWSER_QA_BASE_URL: environment.BROWSER_QA_BASE_URL || undefined,
     BROWSER_QA_TOKEN: environment.BROWSER_QA_TOKEN || undefined,
   });
 
-  if (!(parsed.OAUTH_SIGNING_SECRET && parsed.OAUTH_ADMIN_PASSWORD) && !parsed.MCP_STATIC_TOKEN) {
-    throw new Error(
-      "Configure OAuth (OAUTH_SIGNING_SECRET and OAUTH_ADMIN_PASSWORD) or MCP_STATIC_TOKEN.",
-    );
+  if (Boolean(parsed.OAUTH_ADMIN_PASSWORD) !== Boolean(parsed.OAUTH_STATE_DB_PATH)) {
+    throw new Error("OAUTH_ADMIN_PASSWORD and OAUTH_STATE_DB_PATH must be configured together.");
+  }
+
+  if (!parsed.OAUTH_ADMIN_PASSWORD && !parsed.MCP_STATIC_TOKEN) {
+    throw new Error("Configure durable OAuth (OAUTH_ADMIN_PASSWORD and OAUTH_STATE_DB_PATH) or MCP_STATIC_TOKEN.");
+  }
+
+  if (environment.NODE_ENV === "production" && parsed.OAUTH_STATE_DB_PATH) {
+    if (parsed.OAUTH_STATE_DB_PATH === ":memory:") {
+      throw new Error("OAUTH_STATE_DB_PATH must be durable in production; :memory: is test-only.");
+    }
+    if (!isAbsolute(parsed.OAUTH_STATE_DB_PATH)) {
+      throw new Error("OAUTH_STATE_DB_PATH must be an absolute path in production.");
+    }
   }
 
   if (parsed.WHATSAPP_MCP_TOKEN && parsed.MCP_STATIC_TOKEN && parsed.WHATSAPP_MCP_TOKEN === parsed.MCP_STATIC_TOKEN) {
@@ -98,8 +110,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     wordpressUrl: withoutTrailingSlash(parsed.WORDPRESS_URL),
     wordpressUsername: parsed.WORDPRESS_USERNAME,
     wordpressAppPassword: parsed.WORDPRESS_APP_PASSWORD,
-    ...(parsed.OAUTH_SIGNING_SECRET ? { oauthSigningSecret: parsed.OAUTH_SIGNING_SECRET } : {}),
     ...(parsed.OAUTH_ADMIN_PASSWORD ? { oauthAdminPassword: parsed.OAUTH_ADMIN_PASSWORD } : {}),
+    ...(parsed.OAUTH_STATE_DB_PATH ? { oauthStateDbPath: parsed.OAUTH_STATE_DB_PATH } : {}),
     ...(parsed.MCP_STATIC_TOKEN ? { staticToken: parsed.MCP_STATIC_TOKEN } : {}),
     ...(parsed.WHATSAPP_MCP_TOKEN ? { whatsappMcpToken: parsed.WHATSAPP_MCP_TOKEN } : {}),
     ...(parsed.BROWSER_QA_BASE_URL
@@ -123,7 +135,9 @@ export function redactConfig(config: AppConfig): Record<string, unknown> {
     resourceUrl: config.resourceUrl,
     wordpressUrl: config.wordpressUrl,
     wordpressUsername: config.wordpressUsername,
-    oauthEnabled: Boolean(config.oauthSigningSecret && config.oauthAdminPassword),
+    oauthEnabled: Boolean(config.oauthAdminPassword && config.oauthStateDbPath),
+    oauthStateStorage: config.oauthStateDbPath ? "sqlite" : "disabled",
+    oauthStateDurable: Boolean(config.oauthStateDbPath && config.oauthStateDbPath !== ":memory:"),
     staticTokenEnabled: Boolean(config.staticToken),
     whatsappMcpTokenEnabled: Boolean(config.whatsappMcpToken),
     browserQaEnabled: Boolean(config.browserQaBaseUrl && config.browserQaToken),
