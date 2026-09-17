@@ -22,17 +22,27 @@ function signingFixture(mode: "dual" | "signed"): {
   dirs.push(dir);
   const keyPath = join(dir, "gateway-ed25519.pem");
   writeFileSync(keyPath, privateKey.export({ format: "pem", type: "pkcs8" }));
-  return {
-    publicKey,
-    config: {
-      ...testConfig,
-      wordpressAuthMode: mode,
-      wordpressSigningKeyId: "gateway-test-key",
-      wordpressSigningPrivateKeyPath: keyPath,
-      wordpressSigningTtlSeconds: 60,
-      ...(mode === "signed" ? { wordpressUsername: undefined, wordpressAppPassword: undefined } : {}),
-    },
-  };
+
+  const signing = {
+    wordpressAuthMode: mode,
+    wordpressSigningKeyId: "gateway-test-key",
+    wordpressSigningPrivateKeyPath: keyPath,
+    wordpressSigningTtlSeconds: 60,
+  } satisfies Partial<AppConfig>;
+
+  let config: AppConfig;
+  if (mode === "signed") {
+    const {
+      wordpressUsername: _wordpressUsername,
+      wordpressAppPassword: _wordpressAppPassword,
+      ...withoutBasic
+    } = testConfig;
+    config = { ...withoutBasic, ...signing, wordpressAuthMode: "signed" };
+  } else {
+    config = { ...testConfig, ...signing, wordpressAuthMode: "dual" };
+  }
+
+  return { publicKey, config };
 }
 
 function attestationFromHeaders(headers: Headers): WordPressRequestAttestation {
