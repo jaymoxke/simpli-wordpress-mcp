@@ -8,9 +8,10 @@ Do not mark v3 complete or remove the legacy production path until every applica
 - [ ] CI tests pass.
 - [ ] Production build succeeds.
 - [ ] Runtime syntax check succeeds.
-- [ ] `src/` contains no Novamira endpoint/package dependency.
-- [ ] MCP server metadata, `/`, `/health`, `/ready.release`, and `/version` report the same canonical release version.
-- [ ] `/version` returns `novamiraDependency: false`.
+- [ ] Gateway `src/` contains no Novamira endpoint/package dependency.
+- [ ] MCP server metadata, `/`, `/health`, `/ready.release`, and `/version` report the same canonical runtime release version.
+- [ ] `/version` returns `novamiraGatewayDependency: false`.
+- [ ] `/version` continues to report `wordpressBackendIndependence: "unverified"` until Section 6 has passed; it must not claim backend independence early.
 - [ ] No secret appears in build logs, deploy logs, status responses, or MCP tool results.
 
 ## 2. Infrastructure
@@ -79,6 +80,7 @@ Do not mark v3 complete or remove the legacy production path until every applica
 - [ ] Representative governed write operations pass with Novamira disabled.
 - [ ] Disabling Novamira and Novamira Pro does not reduce `/ready` below the accepted v3 scope.
 - [ ] Re-enabling legacy plugins remains available as rollback during the observation window.
+- [ ] Only after the preceding checks pass may release metadata promote `wordpressBackendIndependence` from `"unverified"` to a verified state.
 
 ## 7. Recovery and operations
 
