@@ -7,7 +7,7 @@ on:
     branches: [v3-foundation-novamira-free]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   verify-protocol-migration:
@@ -20,13 +20,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Use current npm for deterministic lock generation
-        run: npm install --global npm@11.6.0
-      - name: Generate exact v3 protocol dependency lock
-        run: |
-          rm -f package-lock.json
-          npm install --package-lock-only --no-audit --no-fund
-      - name: Install from generated lock
+          cache: npm
+      - name: Install from committed lock
         run: npm ci --no-audit --no-fund
       - name: Type and static checks
         run: npm run check
@@ -42,21 +37,3 @@ jobs:
         run: npm run build
       - name: Runtime syntax check
         run: node --check dist/server.js
-      - name: Commit verified dependency lock to protocol branch
-        if: github.event_name == 'push'
-        run: |
-          if git diff --quiet -- package-lock.json; then
-            echo "package-lock.json already current"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json
-          git commit -m "v3 protocol: lock verified MCP SDK v2 dependencies [skip ci]"
-          git push origin HEAD:v3-protocol-mcp-v2
-      - name: Retain generated lock evidence
-        uses: actions/upload-artifact@v4
-        with:
-          name: v3-protocol-package-lock
-          path: package-lock.json
-          if-no-files-found: error
