@@ -6,9 +6,12 @@ import {
 } from "../src/authority-gate.js";
 
 describe("public gateway authority gate", () => {
-  it("allows direct read execution only", () => {
-    expect(() => assertGatewayExecutionAllowed("wordpress:read", "simpli_self_status")).not.toThrow();
-  });
+  it.each(["wordpress:read", "wordpress:sensitive"] as const)(
+    "allows direct governed read execution for %s",
+    (scope) => {
+      expect(() => assertGatewayExecutionAllowed(scope, "simpli_read_test")).not.toThrow();
+    },
+  );
 
   it.each(["wordpress:write", "wordpress:dangerous"] as const)(
     "fails closed for %s before backend mutation execution",
@@ -35,6 +38,7 @@ describe("public gateway authority gate", () => {
       mutationExecutionState: "BLOCKED_UNTIL_AUTHORITY_BRIDGE",
       directBackendWrites: false,
       callerSuppliedAuthorityAccepted: false,
+      sensitiveReadsRequireDedicatedScope: true,
     });
   });
 });
