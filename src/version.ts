@@ -13,7 +13,8 @@ export interface ReleaseMetadata {
   releaseId: string;
   gitSha?: string;
   buildTimestamp?: string;
-  novamiraDependency: false;
+  novamiraGatewayDependency: false;
+  wordpressBackendIndependence: "unverified";
 }
 
 export function releaseMetadata(): ReleaseMetadata {
@@ -27,6 +28,7 @@ export function releaseMetadata(): ReleaseMetadata {
     releaseId,
     ...(gitSha ? { gitSha } : {}),
     ...(buildTimestamp ? { buildTimestamp } : {}),
-    novamiraDependency: false,
+    novamiraGatewayDependency: false,
+    wordpressBackendIndependence: "unverified",
   };
 }
