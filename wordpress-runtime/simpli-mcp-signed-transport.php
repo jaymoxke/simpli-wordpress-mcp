@@ -108,16 +108,6 @@ final class Simpli_MCP_Signed_Transport_Guard
             return self::error('method_not_allowed', 'Signed Simpli MCP transport accepts POST only', 405);
         }
 
-        $configuredKeyId = defined('SIMPLI_MCP_GATEWAY_KEY_ID')
-            ? trim((string) constant('SIMPLI_MCP_GATEWAY_KEY_ID'))
-            : '';
-        $publicKey = defined('SIMPLI_MCP_GATEWAY_PUBLIC_KEY_B64URL')
-            ? trim((string) constant('SIMPLI_MCP_GATEWAY_PUBLIC_KEY_B64URL'))
-            : '';
-        if ($configuredKeyId === '' || $publicKey === '') {
-            return self::error('transport_not_configured', 'Signed Simpli MCP transport verification is not configured', 503);
-        }
-
         $version = self::header($request, 'x-simpli-auth-version');
         $keyId = self::header($request, 'x-simpli-key-id');
         $issuedAtRaw = self::header($request, 'x-simpli-issued-at');
@@ -144,11 +134,17 @@ final class Simpli_MCP_Signed_Transport_Guard
             }
         }
 
+        $admittedKeys = self::admitted_keys();
+        if ($admittedKeys === []) {
+            return self::error('transport_not_configured', 'Signed Simpli MCP transport verification is not configured', 503);
+        }
+        if (!array_key_exists($keyId, $admittedKeys)) {
+            return self::error('key_id_invalid', 'Signed transport key id is not admitted', 401);
+        }
+        $publicKey = $admittedKeys[$keyId];
+
         if (!hash_equals(AUTH_VERSION, $version)) {
             return self::error('auth_version_invalid', 'Unsupported signed transport version', 401);
-        }
-        if (!hash_equals($configuredKeyId, $keyId)) {
-            return self::error('key_id_invalid', 'Signed transport key id is not admitted', 401);
         }
         if (!ctype_digit($issuedAtRaw) || !ctype_digit($expiresAtRaw)) {
             return self::error('timestamp_invalid', 'Signed transport timestamps are invalid', 401);
@@ -197,6 +193,35 @@ final class Simpli_MCP_Signed_Transport_Guard
         }
 
         return true;
+    }
+
+    /** @return array<string, string> */
+    private static function admitted_keys(): array
+    {
+        $keys = [];
+        if (defined('SIMPLI_MCP_GATEWAY_KEYS_JSON')) {
+            $decoded = json_decode((string) constant('SIMPLI_MCP_GATEWAY_KEYS_JSON'), true);
+            if (is_array($decoded)) {
+                foreach (array_slice($decoded, 0, 4, true) as $keyId => $publicKey) {
+                    if (is_string($keyId) && is_string($publicKey)) {
+                        $keyId = trim($keyId);
+                        $publicKey = trim($publicKey);
+                        if ($keyId !== '' && strlen($keyId) <= 128 && $publicKey !== '') {
+                            $keys[$keyId] = $publicKey;
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($keys === [] && defined('SIMPLI_MCP_GATEWAY_KEY_ID') && defined('SIMPLI_MCP_GATEWAY_PUBLIC_KEY_B64URL')) {
+            $keyId = trim((string) constant('SIMPLI_MCP_GATEWAY_KEY_ID'));
+            $publicKey = trim((string) constant('SIMPLI_MCP_GATEWAY_PUBLIC_KEY_B64URL'));
+            if ($keyId !== '' && $publicKey !== '') {
+                $keys[$keyId] = $publicKey;
+            }
+        }
+        return $keys;
     }
 
     private static function header($request, string $name): string
