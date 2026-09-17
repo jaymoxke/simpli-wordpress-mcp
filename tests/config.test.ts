@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "../src/config.js";
+import { DEFAULT_WORDPRESS_USER_AGENT, loadConfig } from "../src/config.js";
 
 const base = {
   PUBLIC_BASE_URL: "https://mcp.example.test/",
@@ -18,6 +18,7 @@ describe("loadConfig", () => {
     expect(config.publicBaseUrl).toBe("https://mcp.example.test");
     expect(config.resourceUrl).toBe("https://mcp.example.test/mcp");
     expect(config.wordpressUrl).toBe("https://wordpress.example.test");
+    expect(config.wordpressUserAgent).toBe(DEFAULT_WORDPRESS_USER_AGENT);
     expect(config.wordpressAuthMode).toBe("basic");
     expect(config.oauthStateDbPath).toBe(":memory:");
   });
@@ -55,6 +56,29 @@ describe("loadConfig", () => {
       OAUTH_STATE_DB_PATH: "/var/lib/simpli-mcp/oauth.sqlite",
     });
     expect(config.oauthStateDbPath).toBe("/var/lib/simpli-mcp/oauth.sqlite");
+  });
+
+  it("requires WORDPRESS_URL to be an exact origin, not a path-bearing alias", () => {
+    expect(() => loadConfig({
+      ...base,
+      WORDPRESS_URL: "https://wordpress.example.test/shop/",
+      MCP_STATIC_TOKEN: "s".repeat(48),
+    })).toThrow(/origin without a path/);
+  });
+
+  it("accepts a bounded browser-compatible WordPress user agent and rejects header injection", () => {
+    const config = loadConfig({
+      ...base,
+      WORDPRESS_USER_AGENT: "Mozilla/5.0 Custom-Simpli-Upstream-Test/1.0",
+      MCP_STATIC_TOKEN: "s".repeat(48),
+    });
+    expect(config.wordpressUserAgent).toBe("Mozilla/5.0 Custom-Simpli-Upstream-Test/1.0");
+
+    expect(() => loadConfig({
+      ...base,
+      WORDPRESS_USER_AGENT: "Mozilla/5.0 safe\r\nX-Evil: injected",
+      MCP_STATIC_TOKEN: "s".repeat(48),
+    })).toThrow(/CR\/LF/);
   });
 
   it("supports signed WordPress transport without a Basic credential", () => {
