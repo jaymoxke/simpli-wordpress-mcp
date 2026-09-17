@@ -7,6 +7,12 @@ import { WordPressClient, type SimpliBackendTool } from "../src/wordpress.js";
 import { fakeTools, makeWordPressFetch, testConfig } from "./helpers.js";
 
 const servers: HttpServer[] = [];
+const MODERN_REVISION = "2026-07-28";
+const MODERN_ENVELOPE = {
+  "io.modelcontextprotocol/protocolVersion": MODERN_REVISION,
+  "io.modelcontextprotocol/clientInfo": { name: "simpli-vitest", version: "1.0.0" },
+  "io.modelcontextprotocol/clientCapabilities": {},
+};
 
 const dispatcherTool: SimpliBackendTool = {
   name: "simpli_execute",
@@ -61,6 +67,31 @@ async function rpc(base: string, token: string, body: unknown): Promise<Response
   });
 }
 
+async function modernRpc(
+  base: string,
+  token: string,
+  id: number,
+  method: string,
+  params: Record<string, unknown> = {},
+): Promise<Response> {
+  return fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json, text/event-stream",
+      "Content-Type": "application/json",
+      "Mcp-Protocol-Version": MODERN_REVISION,
+      "Mcp-Method": method,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id,
+      method,
+      params: { ...params, _meta: MODERN_ENVELOPE },
+    }),
+  });
+}
+
 async function readRpcJson<T>(response: Response): Promise<T> {
   const raw = await response.text();
   if (!response.headers.get("content-type")?.includes("text/event-stream")) return JSON.parse(raw) as T;
@@ -80,6 +111,30 @@ describe("Simpli MCP v3 protocol gateway", () => {
     });
     expect(response.status).toBe(401);
     expect(response.headers.get("www-authenticate")).toContain("oauth-protected-resource");
+  });
+
+  it("serves the 2026-07-28 discovery probe and stamps Simpli server identity", async () => {
+    const { base, token } = await listen();
+    const discovered = await modernRpc(base, token, 10, "server/discover");
+    expect(discovered.status).toBe(200);
+    expect(discovered.headers.get("mcp-session-id")).toBeNull();
+    const payload = await readRpcJson<{
+      result: {
+        supportedVersions: string[];
+        _meta?: Record<string, { name?: string; version?: string }>;
+      };
+    }>(discovered);
+    expect(payload.result.supportedVersions).toContain(MODERN_REVISION);
+    expect(payload.result._meta?.["io.modelcontextprotocol/serverInfo"]?.name).toBe("simpli-mcp");
+  });
+
+  it("serves 2026-07-28 tools/list with the per-request envelope", async () => {
+    const { base, token } = await listen();
+    const listed = await modernRpc(base, token, 11, "tools/list");
+    expect(listed.status).toBe(200);
+    expect(listed.headers.get("mcp-session-id")).toBeNull();
+    const payload = await readRpcJson<{ result: { tools: Array<{ name: string }> } }>(listed);
+    expect(payload.result.tools.map((tool) => tool.name)).toEqual(fakeTools.map((tool) => tool.name));
   });
 
   it("serves stateless legacy tools/list without an MCP session id", async () => {
