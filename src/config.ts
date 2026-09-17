@@ -5,8 +5,12 @@ const EnvSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   PUBLIC_BASE_URL: z.string().url(),
   WORDPRESS_URL: z.string().url(),
-  WORDPRESS_USERNAME: z.string().min(1),
-  WORDPRESS_APP_PASSWORD: z.string().min(8),
+  WORDPRESS_AUTH_MODE: z.enum(["basic", "dual", "signed"]).default("basic"),
+  WORDPRESS_USERNAME: z.string().min(1).optional(),
+  WORDPRESS_APP_PASSWORD: z.string().min(8).optional(),
+  WORDPRESS_SIGNING_KEY_ID: z.string().trim().min(1).max(128).optional(),
+  WORDPRESS_SIGNING_PRIVATE_KEY_PATH: z.string().trim().min(1).optional(),
+  WORDPRESS_SIGNING_TTL_SECONDS: z.coerce.number().int().min(10).max(300).default(60),
   OAUTH_ADMIN_PASSWORD: z.string().min(16).optional(),
   OAUTH_STATE_DB_PATH: z.string().trim().min(1).optional(),
   MCP_STATIC_TOKEN: z.string().min(32).optional(),
@@ -38,13 +42,19 @@ function assertSecureUrl(value: string, name: string, originOnly: boolean): void
   }
 }
 
+export type WordPressAuthMode = "basic" | "dual" | "signed";
+
 export interface AppConfig {
   port: number;
   publicBaseUrl: string;
   resourceUrl: string;
   wordpressUrl: string;
-  wordpressUsername: string;
-  wordpressAppPassword: string;
+  wordpressAuthMode: WordPressAuthMode;
+  wordpressUsername?: string;
+  wordpressAppPassword?: string;
+  wordpressSigningKeyId?: string;
+  wordpressSigningPrivateKeyPath?: string;
+  wordpressSigningTtlSeconds: number;
   oauthAdminPassword?: string;
   oauthStateDbPath?: string;
   staticToken?: string;
@@ -63,6 +73,10 @@ export interface AppConfig {
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
   const parsed = EnvSchema.parse({
     ...environment,
+    WORDPRESS_USERNAME: environment.WORDPRESS_USERNAME || undefined,
+    WORDPRESS_APP_PASSWORD: environment.WORDPRESS_APP_PASSWORD || undefined,
+    WORDPRESS_SIGNING_KEY_ID: environment.WORDPRESS_SIGNING_KEY_ID || undefined,
+    WORDPRESS_SIGNING_PRIVATE_KEY_PATH: environment.WORDPRESS_SIGNING_PRIVATE_KEY_PATH || undefined,
     OAUTH_ADMIN_PASSWORD: environment.OAUTH_ADMIN_PASSWORD || undefined,
     OAUTH_STATE_DB_PATH: environment.OAUTH_STATE_DB_PATH || undefined,
     MCP_STATIC_TOKEN: environment.MCP_STATIC_TOKEN || undefined,
@@ -70,6 +84,18 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     BROWSER_QA_BASE_URL: environment.BROWSER_QA_BASE_URL || undefined,
     BROWSER_QA_TOKEN: environment.BROWSER_QA_TOKEN || undefined,
   });
+
+  const needsBasic = parsed.WORDPRESS_AUTH_MODE === "basic" || parsed.WORDPRESS_AUTH_MODE === "dual";
+  const needsSigning = parsed.WORDPRESS_AUTH_MODE === "signed" || parsed.WORDPRESS_AUTH_MODE === "dual";
+
+  if (needsBasic && !(parsed.WORDPRESS_USERNAME && parsed.WORDPRESS_APP_PASSWORD)) {
+    throw new Error("WORDPRESS_USERNAME and WORDPRESS_APP_PASSWORD are required for basic/dual WordPress auth.");
+  }
+  if (needsSigning && !(parsed.WORDPRESS_SIGNING_KEY_ID && parsed.WORDPRESS_SIGNING_PRIVATE_KEY_PATH)) {
+    throw new Error(
+      "WORDPRESS_SIGNING_KEY_ID and WORDPRESS_SIGNING_PRIVATE_KEY_PATH are required for signed/dual WordPress auth.",
+    );
+  }
 
   if (Boolean(parsed.OAUTH_ADMIN_PASSWORD) !== Boolean(parsed.OAUTH_STATE_DB_PATH)) {
     throw new Error("OAUTH_ADMIN_PASSWORD and OAUTH_STATE_DB_PATH must be configured together.");
@@ -79,12 +105,17 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     throw new Error("Configure durable OAuth (OAUTH_ADMIN_PASSWORD and OAUTH_STATE_DB_PATH) or MCP_STATIC_TOKEN.");
   }
 
-  if (environment.NODE_ENV === "production" && parsed.OAUTH_STATE_DB_PATH) {
-    if (parsed.OAUTH_STATE_DB_PATH === ":memory:") {
-      throw new Error("OAUTH_STATE_DB_PATH must be durable in production; :memory: is test-only.");
+  if (environment.NODE_ENV === "production") {
+    if (parsed.OAUTH_STATE_DB_PATH) {
+      if (parsed.OAUTH_STATE_DB_PATH === ":memory:") {
+        throw new Error("OAUTH_STATE_DB_PATH must be durable in production; :memory: is test-only.");
+      }
+      if (!isAbsolute(parsed.OAUTH_STATE_DB_PATH)) {
+        throw new Error("OAUTH_STATE_DB_PATH must be an absolute path in production.");
+      }
     }
-    if (!isAbsolute(parsed.OAUTH_STATE_DB_PATH)) {
-      throw new Error("OAUTH_STATE_DB_PATH must be an absolute path in production.");
+    if (needsSigning && parsed.WORDPRESS_SIGNING_PRIVATE_KEY_PATH && !isAbsolute(parsed.WORDPRESS_SIGNING_PRIVATE_KEY_PATH)) {
+      throw new Error("WORDPRESS_SIGNING_PRIVATE_KEY_PATH must be an absolute path in production.");
     }
   }
 
@@ -108,8 +139,14 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     publicBaseUrl,
     resourceUrl: `${publicBaseUrl}/mcp`,
     wordpressUrl: withoutTrailingSlash(parsed.WORDPRESS_URL),
-    wordpressUsername: parsed.WORDPRESS_USERNAME,
-    wordpressAppPassword: parsed.WORDPRESS_APP_PASSWORD,
+    wordpressAuthMode: parsed.WORDPRESS_AUTH_MODE,
+    ...(parsed.WORDPRESS_USERNAME ? { wordpressUsername: parsed.WORDPRESS_USERNAME } : {}),
+    ...(parsed.WORDPRESS_APP_PASSWORD ? { wordpressAppPassword: parsed.WORDPRESS_APP_PASSWORD } : {}),
+    ...(parsed.WORDPRESS_SIGNING_KEY_ID ? { wordpressSigningKeyId: parsed.WORDPRESS_SIGNING_KEY_ID } : {}),
+    ...(parsed.WORDPRESS_SIGNING_PRIVATE_KEY_PATH
+      ? { wordpressSigningPrivateKeyPath: parsed.WORDPRESS_SIGNING_PRIVATE_KEY_PATH }
+      : {}),
+    wordpressSigningTtlSeconds: parsed.WORDPRESS_SIGNING_TTL_SECONDS,
     ...(parsed.OAUTH_ADMIN_PASSWORD ? { oauthAdminPassword: parsed.OAUTH_ADMIN_PASSWORD } : {}),
     ...(parsed.OAUTH_STATE_DB_PATH ? { oauthStateDbPath: parsed.OAUTH_STATE_DB_PATH } : {}),
     ...(parsed.MCP_STATIC_TOKEN ? { staticToken: parsed.MCP_STATIC_TOKEN } : {}),
@@ -134,7 +171,9 @@ export function redactConfig(config: AppConfig): Record<string, unknown> {
     publicBaseUrl: config.publicBaseUrl,
     resourceUrl: config.resourceUrl,
     wordpressUrl: config.wordpressUrl,
-    wordpressUsername: config.wordpressUsername,
+    wordpressAuthMode: config.wordpressAuthMode,
+    wordpressSigningEnabled: config.wordpressAuthMode === "signed" || config.wordpressAuthMode === "dual",
+    ...(config.wordpressSigningKeyId ? { wordpressSigningKeyId: config.wordpressSigningKeyId } : {}),
     oauthEnabled: Boolean(config.oauthAdminPassword && config.oauthStateDbPath),
     oauthStateStorage: config.oauthStateDbPath ? "sqlite" : "disabled",
     oauthStateDurable: Boolean(config.oauthStateDbPath && config.oauthStateDbPath !== ":memory:"),
