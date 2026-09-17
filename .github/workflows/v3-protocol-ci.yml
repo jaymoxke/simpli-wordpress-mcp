@@ -7,7 +7,7 @@ on:
     branches: [v3-foundation-novamira-free]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify-protocol-migration:
@@ -42,7 +42,19 @@ jobs:
         run: npm run build
       - name: Runtime syntax check
         run: node --check dist/server.js
-      - name: Retain generated lock for branch repair
+      - name: Commit verified dependency lock to protocol branch
+        if: github.event_name == 'push'
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo "package-lock.json already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "v3 protocol: lock verified MCP SDK v2 dependencies [skip ci]"
+          git push origin HEAD:v3-protocol-mcp-v2
+      - name: Retain generated lock evidence
         uses: actions/upload-artifact@v4
         with:
           name: v3-protocol-package-lock
