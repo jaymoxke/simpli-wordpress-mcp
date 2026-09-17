@@ -22,6 +22,9 @@ final class Simpli_MCP_Signed_Transport_Guard
     private const ROUTE = '/simpli-mcp/v1/mcp';
     private const TABLE_SUFFIX = 'simpli_mcp_request_nonces';
 
+    /** @var array<int, true> */
+    private static array $verifiedRequests = [];
+
     public static function bootstrap(): void
     {
         add_filter('rest_pre_dispatch', [self::class, 'guard'], 5, 3);
@@ -43,6 +46,17 @@ final class Simpli_MCP_Signed_Transport_Guard
             PRIMARY KEY  (nonce_hash),
             KEY expires_at (expires_at)
         ) {$charset};");
+    }
+
+    /**
+     * Final first-party runtime permission callbacks can use this after
+     * rest_pre_dispatch has verified the request. A true value means only that
+     * machine transport identity/replay checks passed; it does not grant
+     * business authority for a capability or mutation.
+     */
+    public static function is_verified_request($request): bool
+    {
+        return is_object($request) && isset(self::$verifiedRequests[spl_object_id($request)]);
     }
 
     /**
@@ -75,6 +89,7 @@ final class Simpli_MCP_Signed_Transport_Guard
 
         $verification = self::verify($request, $mode === 'enforce');
         if ($verification === true) {
+            self::$verifiedRequests[spl_object_id($request)] = true;
             return $result;
         }
 
