@@ -29,7 +29,7 @@ async function listen(): Promise<string> {
 }
 
 describe("canonical release identity", () => {
-  it("reports one release version consistently and exposes the intentional write block", async () => {
+  it("reports release, edge posture and intentional write block consistently", async () => {
     const base = await listen();
 
     const [rootResponse, healthResponse, versionResponse, readyResponse] = await Promise.all([
@@ -53,6 +53,9 @@ describe("canonical release identity", () => {
       authority?: Record<string, unknown>;
       readExecutionReady?: boolean;
       writeExecutionReady?: boolean;
+      endpointOrigin?: string;
+      redirectPolicy?: string;
+      userAgentMode?: string;
     };
 
     for (const payload of [root, health, version, ready.release ?? {}]) {
@@ -61,6 +64,9 @@ describe("canonical release identity", () => {
       expect(payload.oauthTokenModel).toBe("opaque-sha256-sqlite");
       expect(payload.oauthRefreshRotation).toBe(true);
       expect(payload.oauthDurableReplayProtection).toBe(true);
+      expect(payload.wordpressOriginPolicy).toBe("exact-origin-no-redirect");
+      expect(payload.wordpressUserAgentPosture).toBe("browser-compatible-configurable");
+      expect(payload.wordpressIdentityHeader).toBe("X-Simpli-Client");
       expect(payload.publicGatewayExecutionCeiling).toBe("A2_PROPOSE");
       expect(payload.mutationAuthoritySource).toBe("supercomputer-sealed-permit");
       expect(payload.mutationExecutionState).toBe("BLOCKED_UNTIL_AUTHORITY_BRIDGE");
@@ -81,6 +87,9 @@ describe("canonical release identity", () => {
     });
     expect(ready.readExecutionReady).toBe(true);
     expect(ready.writeExecutionReady).toBe(false);
+    expect(ready.endpointOrigin).toBe("https://wordpress.example.test");
+    expect(ready.redirectPolicy).toBe("reject");
+    expect(ready.userAgentMode).toBe("browser-compatible");
     expect(ready.authority).toMatchObject({
       executionCeiling: "A2_PROPOSE",
       mutationAuthoritySource: "supercomputer-sealed-permit",
