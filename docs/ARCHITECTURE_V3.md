@@ -1,10 +1,10 @@
 # Simpli MCP v3 Architecture
 
-Status: foundation candidate. This document defines the target architecture and migration invariants. It does not assert that the production cutover is complete.
+Status: staged migration candidate. This document defines the target architecture and migration invariants; it does not assert production cutover is complete.
 
 ## Objective
 
-Remove Novamira and Novamira Pro from the Simpli control path while preserving the useful engineering patterns: typed capability discovery, OAuth-protected remote MCP access, safety annotations, bounded diagnostics, reversible change workflows, and modular domain integrations.
+Remove Novamira and Novamira Pro from the Simpli control path while preserving useful engineering patterns through clean-room implementation: typed capability discovery, OAuth-protected remote MCP access, safety annotations, bounded diagnostics, reversible workflows and modular domain integrations.
 
 Simpli MCP v3 is a first-party control plane. WordPress is an execution backend, not the public MCP/OAuth server.
 
@@ -13,14 +13,17 @@ Simpli MCP v3 is a first-party control plane. WordPress is an execution backend,
 ```text
 ChatGPT / Claude / Codex / approved MCP clients
                   |
-                  | HTTPS + OAuth
+                  | HTTPS + OAuth/PKCE
                   v
         Simpli MCP public edge
                   |
                   v
         Simpli governance kernel
                   |
-      exact ability + authority
+        exact business authority
+                  |
+                  v
+      Ed25519 signed backend transport
                   |
                   v
         Simpli WordPress runtime
@@ -29,7 +32,7 @@ ChatGPT / Claude / Codex / approved MCP clients
         WordPress / WooCommerce
 ```
 
-The public OAuth/MCP origin must be independent of the WordPress hosting edge. cPGuard, LiteSpeed, or another WordPress-side WAF must not be required for MCP client discovery or authorization.
+The public OAuth/MCP origin is independent of WordPress-hosted OAuth. cPGuard/LiteSpeed on the WordPress host therefore cannot block ChatGPT/Claude OAuth discovery by User-Agent.
 
 ## Trust boundaries
 
@@ -38,18 +41,26 @@ The public OAuth/MCP origin must be independent of the WordPress hosting edge. c
 Responsibilities:
 
 - MCP protocol handling;
-- OAuth protected-resource and authorization-server metadata;
-- client identity and token validation;
-- rate limiting and request-size limits;
-- stable capability catalogue surface;
+- OAuth protected-resource/authorization metadata;
+- external client identity and token validation;
+- rate/request-size controls;
+- stable public tool surface;
 - request/trace identifiers;
 - output limits and redaction.
 
-The public edge must not contain WordPress administrator credentials in client-visible state or logs.
+The public edge must not expose WordPress credentials, private transport keys or authority permits to clients/logs.
 
-### Governance kernel
+### OAuth service
 
-OAuth answers: `may this client enter this broad scope?`
+The current authorization/resource server is co-located. It uses durable high-entropy opaque tokens whose raw values are not persisted; only SHA-256 hashes are stored.
+
+The OAuth layer provides broad client identity/scope, not business-mutation authority.
+
+Current requirements include Authorization Code + PKCE S256, protected-resource metadata, resource binding, durable authorization-code replay protection, refresh rotation/reuse containment and durable revocation.
+
+JWT/JWKS is not required while token validation remains local to the co-located resource server. It becomes relevant only if distributed validation is later justified.
+
+### Governance/authority kernel
 
 Governance answers: `may this exact action execute against this exact object now?`
 
@@ -64,49 +75,61 @@ Authority classes remain separate from OAuth scopes:
 | A5 | High-impact, target-specific dual control |
 | A6 | Always blocked from autonomous execution |
 
-The kernel must fail closed. Access to a tool never implies authority to use it.
+The live SuperComputer already contains a sealed one-use authority lane, durable idempotency and a machine-attestation bridge. v3 should integrate with that source of authority instead of minting a competing authority model inside the public gateway.
+
+### Signed backend transport
+
+The `simpli-wp-request-v1` contract authenticates the Simpli gateway to WordPress and binds the exact HTTP request with Ed25519.
+
+It covers:
+
+```text
+method
+fixed path
+WordPress audience/origin
+transport key ID
+issued-at
+expires-at
+one-use nonce
+exact body SHA-256
+Simpli MCP release ID
+```
+
+This layer proves machine identity, integrity, freshness and replay status. It **does not** grant business authority.
+
+Private signing material remains outside WordPress. WordPress stores only admitted public verifier keys and durable nonce hashes.
 
 ### WordPress runtime
 
-The WordPress component exposes only explicitly admitted first-party Simpli capabilities. Installing another plugin must never automatically expose its administrative API to MCP.
+The WordPress component exposes only explicitly admitted first-party Simpli capabilities. Installing another plugin must not automatically expose its administrative API to MCP.
 
-Normal MCP operation must not expose:
+Normal operation must not expose:
 
-- arbitrary PHP execution;
-- arbitrary WP-CLI;
+- arbitrary PHP/WP-CLI;
 - arbitrary filesystem mutation;
 - temporary administrator-login creation;
-- unbounded SQL execution;
+- unbounded SQL;
 - generic shell/root execution.
 
-Narrow maintenance capabilities may exist only behind explicit policy, exact input schemas, authority classification, and verification.
+The first-party route permission layer must distinguish verified machine transport from semantic execution authority.
 
 ## Stable public tool surface
 
-Prefer a small public surface:
+Prefer a small public interface:
 
-- `simpli_catalog`
-- `simpli_describe`
-- `simpli_execute`
+```text
+simpli_catalog
+simpli_describe
+simpli_execute
+```
 
-Domain abilities remain internal registry entries, for example:
+Domain abilities remain internal registry entries across WordPress/WooCommerce/SEO/storefront/shipping/POS/forms/performance/browser-QA and tightly bounded maintenance.
 
-- WordPress content/media;
-- WooCommerce catalogue/inventory;
-- order and fulfilment reads;
-- Rank Math SEO;
-- forms;
-- storefront-owned configuration;
-- shipping/POS bridge;
-- bounded performance diagnostics;
-- browser QA;
-- narrow maintenance.
+A capability becomes usable only after implementation, schemas, security review, authority assignment, tests, verification contract and explicit registry admission.
 
-A capability becomes MCP-visible only after implementation, schema validation, security review, authority assignment, tests, and explicit registry admission.
+## Material write contract
 
-## Write contract
-
-Every material mutation should implement this sequence:
+Every material mutation should follow:
 
 ```text
 READ
@@ -115,96 +138,120 @@ READ
  -> PREVIEW
  -> AUTHORITY CHECK
  -> IDEMPOTENCY CHECK
+ -> SIGNED TRANSPORT
  -> WRITE
  -> READ BACK
  -> VERIFY
  -> AUDIT
 ```
 
-If a write response is uncertain, inspect state before retrying. Never blindly retry a mutation after an unknown outcome.
+If a write result is uncertain, inspect authoritative state before retry. Never blindly replay a mutation after an unknown outcome.
 
-A future signed WordPress execution envelope should bind at minimum:
+The semantic authority/execution contract should bind or validate, as applicable:
 
-- ability name;
-- authority class;
-- object reference;
-- timestamp and expiry;
-- nonce;
-- idempotency key;
-- expected-before-state digest;
-- payload digest;
-- policy/release identity;
-- one-use permit/signature where required.
+```text
+ability
+object_ref
+authority_class
+issued_at / expires_at
+one-use permit / nonce
+idempotency_key
+expected_before_state
+payload_digest
+policy_digest
+release_id
+verification_read
+```
 
-WordPress should hold verification material, not the SuperComputer private signing key.
+This semantic contract is distinct from the machine transport signature.
 
-## Authentication target
+## Signed transport rollout
 
-Foundation compatibility may retain the existing OAuth implementation while migration is tested. The target is:
+Gateway modes:
 
-- OAuth Authorization Code + PKCE S256;
-- protected-resource metadata;
-- resource/audience binding;
-- issuer validation;
-- Client ID Metadata Documents where supported;
-- DCR compatibility only where required by real clients;
-- asymmetric signing with key IDs and rotation;
-- durable authorization-code replay prevention;
-- refresh-token rotation and family reuse detection;
-- durable client/token revocation;
-- no production static super-token unless an explicitly isolated integration requires one.
+```text
+basic -> dual -> signed
+```
 
-## Protocol migration
+WordPress verifier modes:
 
-The existing gateway uses the MCP TypeScript SDK v1 line and session-oriented Streamable HTTP. v3 will migrate to the stable v2 SDK / 2026-07-28 protocol only after compatibility tests for required clients pass. The migration must be staged; a protocol upgrade must not be coupled to the Novamira removal cutover if doing so increases rollback risk.
+```text
+disabled -> observe -> enforce
+```
+
+Production order is deliberately reversible:
+
+```text
+basic/disabled
+-> install verifier disabled
+-> dual/observe
+-> dual/enforce
+-> signed/enforce after permission integration + acceptance
+-> revoke Application Password
+```
+
+The verifier supports overlapping admitted public keys for rotation. Unknown key IDs fail closed in enforcement mode.
+
+## Protocol architecture
+
+v3 uses the stable MCP TypeScript SDK v2 split packages. The HTTP server is per-request/stateless at the protocol layer, explicitly supports the 2026-07-28 era and retains a stateless legacy fallback only for required older clients.
+
+Protocol compatibility is tested independently from Novamira-removal cutover so rollback remains manageable.
 
 ## Release identity
 
-One canonical release identity must be used by MCP metadata, `/health`, `/ready`, `/version`, logs, and audit evidence:
+One canonical runtime identity is used by MCP metadata, `/health`, `/ready`, `/version`, logs and evidence:
 
-- semantic version;
-- release ID;
-- git SHA when available;
-- build timestamp when available;
-- schema digest;
-- policy digest.
+- semantic version/release ID;
+- git SHA/build timestamp where available;
+- protocol/runtime posture;
+- OAuth token model;
+- signed transport contract/algorithm;
+- independence evidence state.
 
-`src/version.ts` is the beginning of this consolidation. No endpoint should carry a separately hard-coded product version after the migration is complete.
+`wordpressBackendIndependence` remains `unverified` until Novamira-disabled read/write acceptance passes.
 
 ## Observability
 
 Required endpoints:
 
 - `/health`: process liveness only;
-- `/ready`: required dependencies usable;
-- `/version`: immutable release identity;
+- `/ready`: required security/backend dependencies usable;
+- `/version`: canonical release/dependency posture;
 - owner-only bounded diagnostics.
 
-Every consequential operation should emit non-secret evidence including request/trace ID, client identity reference, ability, authority class, object reference, idempotency key, policy/release identity, result, verification state, and latency.
+Consequential operations should emit non-secret evidence such as request/trace ID, client reference, ability, authority class, object reference, idempotency key, policy/release identity, result, verification state and latency.
 
-Never log access tokens, refresh tokens, passwords, private keys, or unnecessary customer records.
+Never log access/refresh tokens, passwords, Application Passwords, private signing keys, one-use permits or unnecessary customer data.
 
-## Durable security state
+## Durable state
 
-Security-sensitive replay/revocation/idempotency state must not rely only on process memory. Initial durable storage may be SQLite WAL on the SuperComputer if operational evidence does not yet justify Postgres. Persistence technology is subordinate to correctness, backup, locking, and recovery tests.
+Security-sensitive state must not depend only on process memory.
+
+Current durable areas include OAuth SQLite state. WordPress signed-transport enforcement uses a durable nonce-claim table. The SuperComputer authority lane has its own durable idempotency ledger.
+
+Persistence technology is subordinate to correctness, backup, locking, recovery and replay behavior.
 
 ## Migration invariants
 
-1. Production WordPress writes remain single-path; shadow testing must never duplicate a live mutation.
-2. Novamira stays available as rollback until first-party parity for required capabilities is proven.
-3. No production Novamira removal occurs before read/write acceptance and rollback tests pass.
-4. Existing functioning Simpli MCP/SuperComputer services are preserved during foundation work.
-5. Every migration step is reversible or has an explicit recovery procedure.
-6. Capability count is not a success metric; useful, governed capability coverage is.
+1. Production WordPress writes remain single-path; shadow testing never duplicates a live mutation.
+2. Machine transport identity never substitutes for business authority.
+3. Novamira remains rollback-capable until first-party required workflows pass acceptance.
+4. No Novamira removal occurs before read/write + rollback evidence.
+5. Existing functioning Simpli/SuperComputer services are preserved during staged work.
+6. Every migration step is reversible or has an explicit recovery path.
+7. Capability count is not a success metric; governed business-workflow coverage is.
+8. No completion claim is based solely on HTTP success, signature success or CI success.
 
 ## Definition of Novamira-free
 
 The migration is complete only when:
 
-- no public MCP or OAuth request depends on Novamira;
-- no admitted Simpli ability dispatches into Novamira/Novamira Pro code;
+- no public MCP/OAuth request depends on Novamira;
+- no admitted first-party ability dispatches into Novamira/Pro code;
 - required business capabilities have first-party implementations;
-- Novamira and Pro can be disabled with all acceptance tests still passing;
+- signed-only backend transport and governed authority work without reusable WordPress backend credentials where accepted;
+- Novamira and Pro can be disabled with all accepted tests passing;
 - rollback evidence exists;
-- an observation period passes without a material dependency being discovered;
+- an observation period completes without a material hidden dependency;
 - the plugins can then be removed without changing MCP client configuration.
