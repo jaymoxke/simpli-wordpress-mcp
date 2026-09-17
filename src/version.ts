@@ -1,5 +1,5 @@
-export const SIMPLI_MCP_VERSION = "3.0.0-rc.3";
-export const SIMPLI_MCP_ARCHITECTURE = "v3-oauth-durable";
+export const SIMPLI_MCP_VERSION = "3.0.0-rc.4";
+export const SIMPLI_MCP_ARCHITECTURE = "v3-signed-wordpress-runtime";
 
 function env(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -20,6 +20,9 @@ export interface ReleaseMetadata {
   oauthTokenModel: "opaque-sha256-sqlite";
   oauthRefreshRotation: true;
   oauthDurableReplayProtection: true;
+  wordpressSignedTransportContract: "simpli-wp-request-v1";
+  wordpressSignedTransportAlgorithm: "Ed25519";
+  wordpressTransportCutover: "staged-basic-dual-signed";
   novamiraGatewayDependency: false;
   wordpressBackendIndependence: "unverified";
 }
@@ -42,6 +45,9 @@ export function releaseMetadata(): ReleaseMetadata {
     oauthTokenModel: "opaque-sha256-sqlite",
     oauthRefreshRotation: true,
     oauthDurableReplayProtection: true,
+    wordpressSignedTransportContract: "simpli-wp-request-v1",
+    wordpressSignedTransportAlgorithm: "Ed25519",
+    wordpressTransportCutover: "staged-basic-dual-signed",
     novamiraGatewayDependency: false,
     wordpressBackendIndependence: "unverified",
   };
