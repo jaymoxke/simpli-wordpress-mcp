@@ -13,6 +13,7 @@ import { constantTimeEqual } from "./crypto.js";
 import { createLogger, type Logger } from "./logger.js";
 import { createMcpServer } from "./mcp.js";
 import { createOAuthRouter, OAuthService, type AuthContext } from "./oauth.js";
+import { releaseMetadata, SIMPLI_MCP_VERSION } from "./version.js";
 import { WordPressClient } from "./wordpress.js";
 
 interface SessionEntry {
@@ -114,12 +115,13 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
 
   app.get("/", (_req, res) => {
     res.json({
-      name: "Simpli WordPress MCP",
-      version: "1.0.0",
+      ...releaseMetadata(),
+      displayName: "Simpli WordPress MCP",
       transport: "MCP Streamable HTTP",
       mcp: `${config.publicBaseUrl}/mcp`,
       health: `${config.publicBaseUrl}/health`,
       readiness: `${config.publicBaseUrl}/ready`,
+      versionEndpoint: `${config.publicBaseUrl}/version`,
       authentication: oauth.enabled ? "OAuth 2.1 with PKCE" : "Static bearer token",
     });
   });
@@ -128,22 +130,28 @@ export function createApp(config: AppConfig, logger: Logger, wordpress: WordPres
     res.type("text/plain").send([
       "Simpli WordPress MCP gateway",
       "",
+      `Release: ${SIMPLI_MCP_VERSION}`,
       "MCP endpoint: /mcp (Streamable HTTP)",
       "OAuth metadata: /.well-known/oauth-protected-resource",
       "Liveness: /health",
       "WordPress readiness: /ready",
+      "Immutable release metadata: /version",
       "",
-      "The gateway dynamically mirrors REST-exposed WordPress Abilities and preserves each ability's input schema and safety annotations.",
+      "The gateway exposes only Simpli-owned, explicitly admitted backend capabilities and preserves each capability's input schema and safety annotations.",
     ].join("\n"));
   });
 
   app.get("/health", (_req, res) => {
-    res.json({ status: "ok", uptimeSeconds: Math.round(process.uptime()), version: "1.0.0" });
+    res.json({ status: "ok", uptimeSeconds: Math.round(process.uptime()), ...releaseMetadata() });
+  });
+
+  app.get("/version", (_req, res) => {
+    res.set("Cache-Control", "no-store").json(releaseMetadata());
   });
 
   app.get("/ready", async (_req, res) => {
     const readiness = await wordpress.readiness();
-    res.status(readiness.ready ? 200 : 503).json(readiness);
+    res.status(readiness.ready ? 200 : 503).json({ ...readiness, release: releaseMetadata() });
   });
 
   const mcpRateLimit = createRateLimit({ windowMs: 60_000, max: 300, keyPrefix: "mcp" });
@@ -247,14 +255,14 @@ export async function startServer(config = loadConfig()): Promise<HttpServer> {
   const logger = createLogger(config);
   const wordpress = new WordPressClient(config, logger);
   const { app, sessions } = createApp(config, logger, wordpress);
-  logger.info("Starting Simpli WordPress MCP", redactConfig(config));
+  logger.info("Starting Simpli WordPress MCP", { ...redactConfig(config), release: releaseMetadata() });
 
   const httpServer = createServer(app);
   await new Promise<void>((resolve, reject) => {
     httpServer.once("error", reject);
     httpServer.listen(config.port, "0.0.0.0", () => resolve());
   });
-  logger.info("Simpli WordPress MCP listening", { port: config.port });
+  logger.info("Simpli WordPress MCP listening", { port: config.port, release: releaseMetadata() });
 
   void wordpress.readiness().then((readiness) => {
     if (readiness.ready) {
