@@ -29,7 +29,7 @@ async function listen(): Promise<string> {
 }
 
 describe("canonical release identity", () => {
-  it("reports one release version consistently across public status endpoints", async () => {
+  it("reports one release version consistently without overstating backend independence", async () => {
     const base = await listen();
 
     const [rootResponse, healthResponse, versionResponse, readyResponse] = await Promise.all([
@@ -51,7 +51,8 @@ describe("canonical release identity", () => {
 
     for (const payload of [root, health, version, ready.release ?? {}]) {
       expect(payload.version).toBe(SIMPLI_MCP_VERSION);
-      expect(payload.novamiraDependency).toBe(false);
+      expect(payload.novamiraGatewayDependency).toBe(false);
+      expect(payload.wordpressBackendIndependence).toBe("unverified");
     }
 
     expect(versionResponse.headers.get("cache-control")).toContain("no-store");
