@@ -1,4 +1,4 @@
-import type { AppConfig } from "../src/config.js";
+import { DEFAULT_WORDPRESS_USER_AGENT, type AppConfig } from "../src/config.js";
 import type { Logger } from "../src/logger.js";
 import type { SimpliBackendTool } from "../src/wordpress.js";
 
@@ -7,6 +7,7 @@ export const testConfig: AppConfig = {
   publicBaseUrl: "https://mcp.example.test",
   resourceUrl: "https://mcp.example.test/mcp",
   wordpressUrl: "https://wordpress.example.test",
+  wordpressUserAgent: DEFAULT_WORDPRESS_USER_AGENT,
   wordpressAuthMode: "basic",
   wordpressUsername: "gateway",
   wordpressAppPassword: "abcd efgh ijkl mnop qrst uvwx",
