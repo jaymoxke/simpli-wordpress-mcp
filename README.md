@@ -39,7 +39,7 @@ The v3 program is staged so production remains recoverable while the gateway bec
 
 ### Phase 2 — protocol modernization
 
-`v3-protocol-mcp-v2` moves the gateway to the stable MCP TypeScript SDK v2 split packages:
+`v3-protocol-mcp-v2` moved the gateway to the stable MCP TypeScript SDK v2 split packages:
 
 ```text
 @modelcontextprotocol/server 2.0.0
@@ -47,7 +47,7 @@ The v3 program is staged so production remains recoverable while the gateway bec
 @modelcontextprotocol/node 2.0.0
 ```
 
-The public HTTP MCP endpoint now uses `createMcpHandler` per request rather than an in-memory server-side MCP session map. It explicitly supports the 2026-07-28 protocol path while retaining the SDK's stateless legacy fallback for older 2025-era clients.
+The public HTTP MCP endpoint uses `createMcpHandler` per request rather than an in-memory server-side MCP session map. It explicitly supports the 2026-07-28 protocol path while retaining the SDK's stateless legacy fallback for older 2025-era clients.
 
 The protocol test suite covers both paths, including:
 
@@ -58,7 +58,24 @@ The protocol test suite covers both paths, including:
 - the restricted WhatsApp credential;
 - existing governed dispatcher/write guards.
 
-`package.json` and the committed lockfile are aligned to runtime version `3.0.0-rc.2` and the exact v2 package set. This is branch-level evidence only; real production client compatibility and deployment remain separate acceptance gates.
+### Phase 3 — durable OAuth state
+
+`v3-oauth-durable` replaces self-contained shared-secret OAuth grants and process-memory replay state with durable opaque-token state:
+
+- Node 24 runtime with built-in SQLite;
+- persistent clients, authorization-code state, access-token state, refresh-token families and revocations;
+- raw authorization codes/access tokens/refresh tokens are never stored — only SHA-256 hashes are persisted;
+- authorization-code replay prevention survives process restart;
+- refresh tokens rotate on every successful refresh;
+- reuse of a rotated refresh token revokes the entire token family;
+- access-token and client revocation take effect durably;
+- omitted OAuth scope defaults to `wordpress:read`;
+- production requires an absolute persistent `OAUTH_STATE_DB_PATH`;
+- `/ready` includes OAuth state health.
+
+Because the authorization server and MCP resource server are co-located, opaque high-entropy bearer tokens are intentionally used instead of adding JWT/JWKS/key-rotation machinery that would not improve the current trust boundary. Distributed token signing can be added later only if the authorization and resource servers are separated or another verified requirement justifies it.
+
+This phase changes the gateway security model only. It does **not** prove real-client production acceptance, WordPress-backend independence, or Novamira retirement.
 
 ## Release identity
 
@@ -91,7 +108,7 @@ The second value must not be promoted until the backend passes the Novamira-disa
 
 ## Authentication and authorization
 
-The current compatibility line supports OAuth Authorization Code + PKCE and bounded static credentials for specific machine clients. OAuth scope controls broad client access; business/execution authority is a separate layer and must not be inferred from tool access.
+The current v3 OAuth path uses Authorization Code + PKCE with durable opaque tokens. OAuth scope controls broad client access; business/execution authority is a separate layer and must not be inferred from tool access.
 
 Current broad scopes are:
 
@@ -101,7 +118,9 @@ Current broad scopes are:
 | `wordpress:write` | Normal bounded writes |
 | `wordpress:dangerous` | High-impact compatibility operations requiring additional controls |
 
-The next security tranche must replace process-memory/shared-secret compatibility controls with durable replay/revocation state, refresh-token rotation, asymmetric signing and key rotation before final production cutover.
+If the client omits `scope`, only `wordpress:read` is granted.
+
+The next security tranche is the **signed WordPress execution contract**: replace broad backend credential trust with exact signed execution envelopes, one-use nonces, idempotency, expected-before-state and mandatory read-back verification.
 
 The v3 migration will progressively replace coarse dangerous access with exact Simpli authority classes and one-use execution permits. A6/irreversible or forbidden operations remain unavailable through normal MCP execution.
 
@@ -137,24 +156,25 @@ Representative domains include:
 - Verify material writes by read-back before reporting completion.
 - Keep output bounded and never log credentials or bearer tokens.
 - Reject redirects from the fixed WordPress origin.
-- Fail closed when policy/catalog readiness is not proven.
+- Fail closed when policy/catalog/OAuth state readiness is not proven.
 
 ## Health and diagnostics
 
 | Endpoint | Meaning |
 | --- | --- |
 | `/health` | Process liveness and canonical runtime release identity |
-| `/ready` | WordPress backend/catalog readiness plus canonical runtime release identity |
+| `/ready` | WordPress backend/catalog readiness plus OAuth-state health and canonical release identity |
 | `/version` | Runtime deployment/release metadata and current independence evidence state |
 | `/.well-known/oauth-protected-resource` | OAuth protected-resource discovery |
 | `/.well-known/oauth-authorization-server` | Authorization-server metadata |
+| `/oauth/revoke` | OAuth token revocation |
 | `/mcp` | Dual-era per-request MCP endpoint |
 
-A successful `/health` response alone does **not** prove WordPress execution readiness, backend independence, or real-client production acceptance.
+A successful `/health` response alone does **not** prove OAuth persistence, WordPress execution readiness, backend independence, or real-client production acceptance.
 
 ## Local verification
 
-Requirements: Node.js 22 or later.
+Requirements: Node.js 24.
 
 ```bash
 npm ci
@@ -163,7 +183,13 @@ npm test
 npm run build
 ```
 
-The test suite includes a regression check that prevents direct Novamira endpoint/package dependencies from being introduced into gateway `src/`.
+The test suite includes:
+
+- direct Novamira gateway-dependency regression checks;
+- canonical release/readiness metadata checks;
+- 2026-07-28 and stateless legacy MCP protocol checks;
+- OAuth PKCE, authorization-code replay, refresh rotation/reuse containment and revocation tests;
+- restart-persistence tests using a real temporary SQLite database.
 
 ## Deployment safety
 
@@ -174,11 +200,12 @@ Before a v3 cutover:
 1. all applicable CI checks pass on the exact release head;
 2. OAuth discovery and PKCE pass with real target clients;
 3. the modern 2026-07-28 MCP path passes real-client acceptance where the client supports it;
-4. `/ready` proves the Simpli backend catalog is available;
-5. representative reads match production truth;
-6. a representative safe write passes read-before-write and read-back verification;
-7. rollback is tested;
-8. Novamira can be disabled without changing Simpli MCP readiness or tool availability required for the accepted scope.
+4. the production OAuth database resides on verified persistent storage and restore/recovery has been tested;
+5. `/ready` proves both OAuth state and the Simpli backend catalog are available;
+6. representative reads match production truth;
+7. a representative safe write passes read-before-write and read-back verification;
+8. rollback is tested;
+9. Novamira can be disabled without changing Simpli MCP readiness or tool availability required for the accepted scope.
 
 See [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md), [docs/ARCHITECTURE_V3.md](docs/ARCHITECTURE_V3.md), and [docs/V3_MIGRATION.md](docs/V3_MIGRATION.md).
 
