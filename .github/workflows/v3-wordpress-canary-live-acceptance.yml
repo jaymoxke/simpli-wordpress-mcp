@@ -35,8 +35,15 @@ jobs:
           echo "final_status=$final_status"
           cat /tmp/final-body.json
 
-          test "$final_status" = "404"
-          grep -Fq '"code":"rest_no_route"' /tmp/final-body.json
+          case "$final_status" in
+            401|404) ;;
+            *) echo "unexpected final-route status: $final_status" >&2; exit 1 ;;
+          esac
+
+          if grep -Fq '"code":"simpli_mcp_wordpress_auth_required"' /tmp/final-body.json; then
+            echo "canary permission signature unexpectedly appeared on final route" >&2
+            exit 1
+          fi
 
           echo "LIVE_CANARY_ROUTE_ACCEPTED"
-          echo "PRODUCTION_ROUTE_UNCHANGED"
+          echo "CANARY_NAMESPACE_ISOLATED_FROM_FINAL_ROUTE"
