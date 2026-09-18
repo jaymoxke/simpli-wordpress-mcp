@@ -1,0 +1,49 @@
+name: V3 WordPress Canary Live Acceptance
+
+on:
+  push:
+    branches: [v3-wordpress-canary-bootstrap]
+    paths:
+      - ".github/workflows/v3-wordpress-canary-live-acceptance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-live-canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe isolated canary route without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          CANARY="https://www.simplicosmetics.co.ke/wp-json/simpli-mcp-canary/v1/mcp"
+          FINAL="https://www.simplicosmetics.co.ke/wp-json/simpli-mcp/v1/mcp"
+          PAYLOAD='{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
+
+          canary_status="$(curl -sS --max-time 20 -A "$UA"             -H 'Accept: application/json' -H 'Content-Type: application/json'             -o /tmp/canary-body.json -w '%{http_code}'             -X POST "$CANARY" --data "$PAYLOAD")"
+          echo "canary_status=$canary_status"
+          cat /tmp/canary-body.json
+
+          test "$canary_status" = "401"
+          grep -Fq '"code":"simpli_mcp_wordpress_auth_required"' /tmp/canary-body.json
+
+          final_status="$(curl -sS --max-time 20 -A "$UA"             -H 'Accept: application/json' -H 'Content-Type: application/json'             -o /tmp/final-body.json -w '%{http_code}'             -X POST "$FINAL" --data "$PAYLOAD")"
+          echo "final_status=$final_status"
+          cat /tmp/final-body.json
+
+          case "$final_status" in
+            401|404) ;;
+            *) echo "unexpected final-route status: $final_status" >&2; exit 1 ;;
+          esac
+
+          if grep -Fq '"code":"simpli_mcp_wordpress_auth_required"' /tmp/final-body.json; then
+            echo "canary permission signature unexpectedly appeared on final route" >&2
+            exit 1
+          fi
+
+          echo "LIVE_CANARY_ROUTE_ACCEPTED"
+          echo "CANARY_NAMESPACE_ISOLATED_FROM_FINAL_ROUTE"
