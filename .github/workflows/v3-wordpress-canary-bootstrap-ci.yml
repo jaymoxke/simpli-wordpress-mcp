@@ -36,17 +36,25 @@ jobs:
           php -l wordpress-runtime/simpli-mcp-runtime.php
           php -l wordpress-runtime/lib/first-party-read-core.php
           php -l wordpress-runtime/canary/simpli-mcp-canary-bootstrap.php
+          php -l wordpress-runtime/canary/includes/canary-service-auth.php
+          php -l wordpress-runtime/canary/includes/canary-service-auth-core.php
       - name: First-party runtime regression
         run: php tests/php/verify-first-party-read-core.php
+      - name: Canary paired-service auth regression
+        run: php tests/php/verify-canary-service-auth-core.php
       - name: Build isolated WordPress canary plugin
         run: |
           set -eu
           rm -rf /tmp/simpli-mcp-canary
           mkdir -p /tmp/simpli-mcp-canary/simpli-mcp-canary/includes/lib
           cp wordpress-runtime/canary/simpli-mcp-canary-bootstrap.php /tmp/simpli-mcp-canary/simpli-mcp-canary/
+          cp wordpress-runtime/canary/includes/canary-service-auth.php /tmp/simpli-mcp-canary/simpli-mcp-canary/includes/
+          cp wordpress-runtime/canary/includes/canary-service-auth-core.php /tmp/simpli-mcp-canary/simpli-mcp-canary/includes/
           cp wordpress-runtime/simpli-mcp-runtime.php /tmp/simpli-mcp-canary/simpli-mcp-canary/includes/
           cp wordpress-runtime/lib/first-party-read-core.php /tmp/simpli-mcp-canary/simpli-mcp-canary/includes/lib/
           php -l /tmp/simpli-mcp-canary/simpli-mcp-canary/simpli-mcp-canary-bootstrap.php
+          php -l /tmp/simpli-mcp-canary/simpli-mcp-canary/includes/canary-service-auth.php
+          php -l /tmp/simpli-mcp-canary/simpli-mcp-canary/includes/canary-service-auth-core.php
           php -l /tmp/simpli-mcp-canary/simpli-mcp-canary/includes/simpli-mcp-runtime.php
           php -l /tmp/simpli-mcp-canary/simpli-mcp-canary/includes/lib/first-party-read-core.php
           cd /tmp/simpli-mcp-canary
@@ -54,8 +62,11 @@ jobs:
       - name: Verify package contents
         run: |
           unzip -l simpli-mcp-canary.zip
+          unzip -p simpli-mcp-canary.zip simpli-mcp-canary/simpli-mcp-canary-bootstrap.php | grep -F "Version: 0.2.0-canary.1"
           unzip -p simpli-mcp-canary.zip simpli-mcp-canary/simpli-mcp-canary-bootstrap.php | grep -F "simpli-mcp-canary/v1"
           unzip -p simpli-mcp-canary.zip simpli-mcp-canary/simpli-mcp-canary-bootstrap.php | grep -F "remove_action('rest_api_init'"
+          unzip -p simpli-mcp-canary.zip simpli-mcp-canary/includes/canary-service-auth-core.php | grep -F "SIMPLI-WP-SERVICE-V1"
+          unzip -p simpli-mcp-canary.zip simpli-mcp-canary/includes/canary-service-auth-core.php | grep -F "/simpli-mcp-canary/v1/mcp"
       - name: Upload installable canary plugin
         uses: actions/upload-artifact@v4
         with:
